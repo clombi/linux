@@ -38,6 +38,7 @@
 #include "pci.h"
 
 static DEFINE_MUTEX(p2p_mutex);
+static DEFINE_MUTEX(tunnel_mutex);
 
 int pnv_pci_get_slot_id(struct device_node *np, uint64_t *id)
 {
@@ -1091,6 +1092,99 @@ out:
 	return rc;
 }
 EXPORT_SYMBOL_GPL(pnv_pci_set_p2p);
+
+int pnv_pci_get_tunnel_ind(struct pci_dev *dev, u64 *ind)
+{
+	__be64 val;
+	struct pci_controller *hose;
+	struct pnv_phb *phb;
+	u64 asnind;
+	int rc;
+
+	if (!opal_check_token(OPAL_PCI_GET_PHB_CMPM))
+		return -ENXIO;
+	if (!opal_check_token(OPAL_PCI_SET_PHB_CMPM))
+		return -ENXIO;
+
+	hose = pci_bus_to_host(dev->bus);
+	phb = hose->private_data;
+
+	mutex_lock(&tunnel_mutex);
+	rc = opal_pci_get_phb_cmpm(phb->opal_id, OPAL_PHB_ASN_CMPM, &val);
+	if (rc != OPAL_SUCCESS) {
+		rc = -EIO;
+		goto out;
+	}
+	asnind = be64_to_cpu(val);
+	if (asnind)
+		goto done;
+
+	/* Hard-coded value for now */
+	asnind = 0x0400;
+	rc = opal_pci_set_phb_cmpm(phb->opal_id, OPAL_PHB_ASN_CMPM, asnind);
+	if (rc != OPAL_SUCCESS) {
+		rc = -EIO;
+		goto out;
+	}
+done:
+	*ind = asnind;
+out:
+	mutex_unlock(&tunnel_mutex);
+	return rc;
+}
+EXPORT_SYMBOL_GPL(pnv_pci_get_tunnel_ind);
+
+int pnv_pci_set_tunnel_bar(struct pci_dev *dev, u64 addr, int enable)
+{
+	__be64 val;
+	struct pci_controller *hose;
+	struct pnv_phb *phb;
+	u64 tunnel_bar;
+	int rc;
+
+	if (!opal_check_token(OPAL_PCI_GET_PBCQ_TUNNEL_BAR))
+		return -ENXIO;
+	if (!opal_check_token(OPAL_PCI_SET_PBCQ_TUNNEL_BAR))
+		return -ENXIO;
+
+	hose = pci_bus_to_host(dev->bus);
+	phb = hose->private_data;
+
+	mutex_lock(&tunnel_mutex);
+	rc = opal_pci_get_pbcq_tunnel_bar(phb->opal_id, &val);
+	if (rc != OPAL_SUCCESS) {
+		rc = -EIO;
+		goto out;
+	}
+	tunnel_bar = be64_to_cpu(val);
+	if (enable) {
+		/*
+		 * Only one device per PHB can use atomics.
+		 * Our policy is first-come, first-served.
+		 */
+		if (tunnel_bar) {
+			rc = -EBUSY;
+			goto out;
+		}
+	} else {
+		/*
+		 * The device that owns atomics and wants to release them
+		 * must reuse the same address, and reset the enable bit.
+		 */
+		if (tunnel_bar != addr) {
+			rc = -EPERM;
+			goto out;
+		}
+		addr = 0x0ull;
+	}
+	rc = opal_pci_set_pbcq_tunnel_bar(phb->opal_id, addr);
+	if (rc != OPAL_SUCCESS)
+		rc = -EIO;
+out:
+	mutex_unlock(&tunnel_mutex);
+	return rc;
+}
+EXPORT_SYMBOL_GPL(pnv_pci_set_tunnel_bar);
 
 void pnv_pci_shutdown(void)
 {

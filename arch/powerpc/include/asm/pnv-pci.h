@@ -28,6 +28,9 @@ extern int pnv_pci_set_power_state(uint64_t id, uint8_t state,
 				   struct opal_msg *msg);
 extern int pnv_pci_set_p2p(struct pci_dev *initiator, struct pci_dev *target,
 			   u64 desc);
+extern int pnv_pci_get_tunnel_ind(struct pci_dev *dev, uint64_t *ind);
+extern int pnv_pci_set_tunnel_bar(struct pci_dev *dev, uint64_t addr,
+				  int enable);
 
 int pnv_phb_to_cxl_mode(struct pci_dev *dev, uint64_t mode);
 int pnv_cxl_ioda_msi_setup(struct pci_dev *dev, unsigned int hwirq,

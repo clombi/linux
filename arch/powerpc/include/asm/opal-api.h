@@ -200,7 +200,11 @@
 #define OPAL_SET_POWER_SHIFT_RATIO		155
 #define OPAL_SENSOR_GROUP_CLEAR			156
 #define OPAL_PCI_SET_P2P			157
-#define OPAL_LAST				157
+#define OPAL_PCI_GET_PHB_CMPM			158
+#define OPAL_PCI_SET_PHB_CMPM			159
+#define OPAL_PCI_GET_PBCQ_TUNNEL_BAR		160
+#define OPAL_PCI_SET_PBCQ_TUNNEL_BAR		161
+#define OPAL_LAST				161
 
 /* Device tree flags */
 
@@ -1105,6 +1109,13 @@ enum {
 #define OPAL_PCI_P2P_ENABLE		0x1
 #define OPAL_PCI_P2P_LOAD		0x2
 #define OPAL_PCI_P2P_STORE		0x4
+
+/* PHB Compare/Mask registers */
+enum {
+	OPAL_PHB_ASN_CMPM	= 0,
+	OPAL_PHB_CAPI_CMPM	= 1,
+	OPAL_PHB_PBL_NBW_CMPM	= 2,
+};
 
 #endif /* __ASSEMBLY__ */
 
