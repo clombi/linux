@@ -11,3 +11,4 @@ obj-$(CONFIG_CXL_BASE)		+= base.o
 
 # For tracepoints to include our trace.h from tracepoint infrastructure:
 CFLAGS_trace.o := -I$(src)
+ccflags-y += -DDEBUG

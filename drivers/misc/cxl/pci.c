@@ -1532,6 +1532,8 @@ static int cxl_read_vsec(struct cxl *adapter, struct pci_dev *dev)
 	CXL_READ_VSEC_STATUS(dev, vsec, &adapter->vsec_status);
 	CXL_READ_VSEC_PSL_REVISION(dev, vsec, &adapter->psl_rev);
 	CXL_READ_VSEC_CAIA_MAJOR(dev, vsec, &adapter->caia_major);
+	pr_devel("WORKAROUND caia_major = 2\n");
+	adapter->caia_major = 2;
 	CXL_READ_VSEC_CAIA_MINOR(dev, vsec, &adapter->caia_minor);
 	CXL_READ_VSEC_BASE_IMAGE(dev, vsec, &adapter->base_image);
 	CXL_READ_VSEC_IMAGE_STATE(dev, vsec, &image_state);
