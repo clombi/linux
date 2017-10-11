@@ -1122,10 +1122,9 @@ int pnv_pci_get_tunnel_ind(struct pci_dev *dev, u64 *ind)
 	/* Hard-coded value for now */
 	asnind = 0x0400;
 	rc = opal_pci_set_phb_cmpm(phb->opal_id, OPAL_PHB_ASN_CMPM, asnind);
-	if (rc != OPAL_SUCCESS) {
-		rc = -EIO;
+	rc = opal_error_code(rc);
+	if (rc)
 		goto out;
-	}
 done:
 	*ind = asnind;
 out:
@@ -1178,8 +1177,7 @@ int pnv_pci_set_tunnel_bar(struct pci_dev *dev, u64 addr, int enable)
 		addr = 0x0ull;
 	}
 	rc = opal_pci_set_pbcq_tunnel_bar(phb->opal_id, addr);
-	if (rc != OPAL_SUCCESS)
-		rc = -EIO;
+	rc = opal_error_code(rc);
 out:
 	mutex_unlock(&tunnel_mutex);
 	return rc;
