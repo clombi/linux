@@ -1146,6 +1146,7 @@ static void pci_dma_dev_setup_pSeriesLP(struct pci_dev *dev)
 	struct device_node *pdn, *dn;
 	struct iommu_table *tbl;
 	const __be32 *dma_window = NULL;
+	const char *device_type;
 	struct pci_dn *pci;
 
 	pr_debug("pci_dma_dev_setup_pSeriesLP: %s\n", pci_name(dev));
@@ -1164,6 +1165,12 @@ static void pci_dma_dev_setup_pSeriesLP(struct pci_dev *dev)
 		dma_window = of_get_property(pdn, "ibm,dma-window", NULL);
 		if (dma_window)
 			break;
+		device_type = of_get_property(pdn, "device_type", NULL);
+		if (device_type && !strcmp(device_type, "open-capi")) {
+			pr_err("OpenCAPI detected. No DMA window for pci"
+			       " dev=%s dn=%pOF\n", pci_name(dev), dn);
+			return;
+		}
 	}
 
 	if (!pdn || !PCI_DN(pdn)) {

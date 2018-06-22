@@ -279,6 +279,22 @@ static void fixup_winbond_82c105(struct pci_dev* dev)
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_WINBOND, PCI_DEVICE_ID_WINBOND_82C105,
 			 fixup_winbond_82c105);
 
+static void pseries_cfg_size_fixup(struct pci_dev *dev)
+{
+	struct device_node *dn = pci_device_to_OF_node(dev);
+	const __be32 *cfg_type;
+
+	if (!machine_is(pseries))
+		return;
+
+	cfg_type = of_get_property(dn, "ibm,pci-config-space-type", NULL);
+	if (!cfg_type || be32_to_cpu(*cfg_type) != 0x1)
+		return;
+
+	dev->cfg_size = PCI_CFG_SPACE_EXP_SIZE;
+}
+DECLARE_PCI_FIXUP_EARLY(PCI_ANY_ID, PCI_ANY_ID, pseries_cfg_size_fixup);
+
 int pseries_root_bridge_prepare(struct pci_host_bridge *bridge)
 {
 	struct device_node *dn, *pdn;

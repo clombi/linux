@@ -439,13 +439,24 @@ static void __init find_and_init_phbs(void)
 	struct device_node *root = of_find_node_by_path("/");
 
 	for_each_child_of_node(root, node) {
-		if (node->type == NULL || (strcmp(node->type, "pci") != 0 &&
-					   strcmp(node->type, "pciex") != 0))
+		if (node->type == NULL ||
+		    (strcmp(node->type, "pci") != 0 &&
+		     strcmp(node->type, "pciex") != 0 &&
+		     strcmp(node->type, "open-capi") != 0))
 			continue;
+
+		if (strcmp(node->type, "open-capi") == 0) {
+			pr_err("found OpenCAPI node");
+		}
 
 		phb = pcibios_alloc_controller(node);
 		if (!phb)
 			continue;
+
+		if (strcmp(node->type, "open-capi") == 0) {
+			pr_err("allocated OpenCAPI PHB");
+		}
+
 		rtas_setup_phb(phb);
 		pci_process_bridge_OF_ranges(phb, node, 0);
 		isa_bridge_find_early(phb);
