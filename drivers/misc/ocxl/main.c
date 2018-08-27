@@ -4,6 +4,8 @@
 #include <linux/pci.h>
 #include "ocxl_internal.h"
 
+const struct ocxl_backend_ops *ocxl_ops;
+
 static int __init init_ocxl(void)
 {
 	int rc = 0;
@@ -11,6 +13,13 @@ static int __init init_ocxl(void)
 	rc = ocxl_file_init();
 	if (rc)
 		return rc;
+
+	if (cpu_has_feature(CPU_FTR_HVMODE))
+		ocxl_ops = &ocxl_native_ops;
+#ifdef CONFIG_PPC_PSERIES
+	else
+		ocxl_ops = &ocxl_guest_ops;
+#endif
 
 	rc = pci_register_driver(&ocxl_pci_driver);
 	if (rc) {

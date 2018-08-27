@@ -4,9 +4,7 @@
 #include <asm/pnv-ocxl.h>
 #include <misc/ocxl.h>
 #include <misc/ocxl-config.h>
-
-#define EXTRACT_BIT(val, bit) (!!(val & BIT(bit)))
-#define EXTRACT_BITS(val, s, e) ((val & GENMASK(e, s)) >> s)
+#include "ocxl_internal.h"
 
 #define OCXL_DVSEC_AFU_IDX_MASK              GENMASK(5, 0)
 #define OCXL_DVSEC_ACTAG_MASK                GENMASK(11, 0)
@@ -26,9 +24,8 @@
 #define OCXL_MAX_AFU_PER_FUNCTION 64
 #define OCXL_TEMPL_LEN            0x58
 #define OCXL_TEMPL_NAME_LEN       24
-#define OCXL_CFG_TIMEOUT     3
 
-static int find_dvsec(struct pci_dev *dev, int dvsec_id)
+int ocxl_find_dvsec(struct pci_dev *dev, int dvsec_id)
 {
 	int vsec = 0;
 	u16 vendor, id;
@@ -44,7 +41,7 @@ static int find_dvsec(struct pci_dev *dev, int dvsec_id)
 	return 0;
 }
 
-static int find_dvsec_afu_ctrl(struct pci_dev *dev, u8 afu_idx)
+int ocxl_find_dvsec_afu_ctrl(struct pci_dev *dev, u8 afu_idx)
 {
 	int vsec = 0;
 	u16 vendor, id;
@@ -96,7 +93,7 @@ static int read_dvsec_tl(struct pci_dev *dev, struct ocxl_fn_config *fn)
 {
 	int pos;
 
-	pos = find_dvsec(dev, OCXL_DVSEC_TL_ID);
+	pos = ocxl_find_dvsec(dev, OCXL_DVSEC_TL_ID);
 	if (!pos && PCI_FUNC(dev->devfn) == 0) {
 		dev_err(&dev->dev, "Can't find TL DVSEC\n");
 		return -ENODEV;
@@ -114,7 +111,7 @@ static int read_dvsec_function(struct pci_dev *dev, struct ocxl_fn_config *fn)
 	int pos, afu_present;
 	u32 val;
 
-	pos = find_dvsec(dev, OCXL_DVSEC_FUNC_ID);
+	pos = ocxl_find_dvsec(dev, OCXL_DVSEC_FUNC_ID);
 	if (!pos) {
 		dev_err(&dev->dev, "Can't find function DVSEC\n");
 		return -ENODEV;
@@ -145,7 +142,7 @@ static int read_dvsec_afu_info(struct pci_dev *dev, struct ocxl_fn_config *fn)
 		return 0;
 	}
 
-	pos = find_dvsec(dev, OCXL_DVSEC_AFU_INFO_ID);
+	pos = ocxl_find_dvsec(dev, OCXL_DVSEC_AFU_INFO_ID);
 	if (!pos) {
 		dev_err(&dev->dev, "Can't find AFU information DVSEC\n");
 		return -ENODEV;
@@ -169,7 +166,7 @@ static int read_dvsec_vendor(struct pci_dev *dev)
 	if (PCI_FUNC(dev->devfn) != 0)
 		return 0;
 
-	pos = find_dvsec(dev, OCXL_DVSEC_VENDOR_ID);
+	pos = ocxl_find_dvsec(dev, OCXL_DVSEC_VENDOR_ID);
 	if (!pos)
 		return 0;
 
@@ -245,43 +242,14 @@ int ocxl_config_read_function(struct pci_dev *dev, struct ocxl_fn_config *fn)
 }
 EXPORT_SYMBOL_GPL(ocxl_config_read_function);
 
-static int read_afu_info(struct pci_dev *dev, struct ocxl_fn_config *fn,
-			int offset, u32 *data)
-{
-	u32 val;
-	unsigned long timeout = jiffies + (HZ * OCXL_CFG_TIMEOUT);
-	int pos = fn->dvsec_afu_info_pos;
-
-	/* Protect 'data valid' bit */
-	if (EXTRACT_BIT(offset, 31)) {
-		dev_err(&dev->dev, "Invalid offset in AFU info DVSEC\n");
-		return -EINVAL;
-	}
-
-	pci_write_config_dword(dev, pos + OCXL_DVSEC_AFU_INFO_OFF, offset);
-	pci_read_config_dword(dev, pos + OCXL_DVSEC_AFU_INFO_OFF, &val);
-	while (!EXTRACT_BIT(val, 31)) {
-		if (time_after_eq(jiffies, timeout)) {
-			dev_err(&dev->dev,
-				"Timeout while reading AFU info DVSEC (offset=%d)\n",
-				offset);
-			return -EBUSY;
-		}
-		cpu_relax();
-		pci_read_config_dword(dev, pos + OCXL_DVSEC_AFU_INFO_OFF, &val);
-	}
-	pci_read_config_dword(dev, pos + OCXL_DVSEC_AFU_INFO_DATA, data);
-	return 0;
-}
-
 int ocxl_config_check_afu_index(struct pci_dev *dev,
 				struct ocxl_fn_config *fn, int afu_idx)
 {
 	u32 val;
 	int rc, templ_major, templ_minor, len;
 
-	pci_write_config_word(dev, fn->dvsec_afu_info_pos, afu_idx);
-	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_VERSION, &val);
+	pci_write_config_word(dev, fn->dvsec_afu_info_pos + OCXL_DVSEC_AFU_INFO_AFU_IDX, afu_idx);
+	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_VERSION, &val);
 	if (rc)
 		return rc;
 
@@ -312,7 +280,7 @@ static int read_afu_name(struct pci_dev *dev, struct ocxl_fn_config *fn,
 
 	BUILD_BUG_ON(OCXL_AFU_NAME_SZ < OCXL_TEMPL_NAME_LEN);
 	for (i = 0; i < OCXL_TEMPL_NAME_LEN; i += 4) {
-		rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_NAME + i, &val);
+		rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_NAME + i, &val);
 		if (rc)
 			return rc;
 		ptr = (u32 *) &afu->name[i];
@@ -331,18 +299,18 @@ static int read_afu_mmio(struct pci_dev *dev, struct ocxl_fn_config *fn,
 	/*
 	 * Global MMIO
 	 */
-	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_GLOBAL, &val);
+	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_GLOBAL, &val);
 	if (rc)
 		return rc;
 	afu->global_mmio_bar = EXTRACT_BITS(val, 0, 2);
 	afu->global_mmio_offset = EXTRACT_BITS(val, 16, 31) << 16;
 
-	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_GLOBAL + 4, &val);
+	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_GLOBAL + 4, &val);
 	if (rc)
 		return rc;
 	afu->global_mmio_offset += (u64) val << 32;
 
-	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_GLOBAL_SZ, &val);
+	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_GLOBAL_SZ, &val);
 	if (rc)
 		return rc;
 	afu->global_mmio_size = val;
@@ -350,18 +318,18 @@ static int read_afu_mmio(struct pci_dev *dev, struct ocxl_fn_config *fn,
 	/*
 	 * Per-process MMIO
 	 */
-	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_PP, &val);
+	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_PP, &val);
 	if (rc)
 		return rc;
 	afu->pp_mmio_bar = EXTRACT_BITS(val, 0, 2);
 	afu->pp_mmio_offset = EXTRACT_BITS(val, 16, 31) << 16;
 
-	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_PP + 4, &val);
+	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_PP + 4, &val);
 	if (rc)
 		return rc;
 	afu->pp_mmio_offset += (u64) val << 32;
 
-	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_PP_SZ, &val);
+	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_PP_SZ, &val);
 	if (rc)
 		return rc;
 	afu->pp_mmio_stride = val;
@@ -375,7 +343,7 @@ static int read_afu_control(struct pci_dev *dev, struct ocxl_afu_config *afu)
 	u8 val8;
 	u16 val16;
 
-	pos = find_dvsec_afu_ctrl(dev, afu->idx);
+	pos = ocxl_find_dvsec_afu_ctrl(dev, afu->idx);
 	if (!pos) {
 		dev_err(&dev->dev, "Can't find AFU control DVSEC for AFU %d\n",
 			afu->idx);
@@ -458,7 +426,7 @@ int ocxl_config_read_afu(struct pci_dev *dev, struct ocxl_fn_config *fn,
 	if (rc)
 		return rc;
 
-	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_AFU_VERSION, &val32);
+	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_AFU_VERSION, &val32);
 	if (rc)
 		return rc;
 	afu->version_major = EXTRACT_BITS(val32, 24, 31);
@@ -471,7 +439,7 @@ int ocxl_config_read_afu(struct pci_dev *dev, struct ocxl_fn_config *fn,
 	if (rc)
 		return rc;
 
-	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MEM_SZ, &val32);
+	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MEM_SZ, &val32);
 	if (rc)
 		return rc;
 	afu->log_mem_size = EXTRACT_BITS(val32, 0, 7);
@@ -512,7 +480,7 @@ int ocxl_config_get_actag_info(struct pci_dev *dev, u16 *base, u16 *enabled,
 	 * avoid an external driver using ocxl as a library to call
 	 * platform-dependent code
 	 */
-	rc = pnv_ocxl_get_actag(dev, base, enabled, supported);
+	rc = ocxl_ops->get_actag(dev, base, enabled, supported);
 	if (rc) {
 		dev_err(&dev->dev, "Can't get actag for device: %d\n", rc);
 		return rc;
@@ -536,7 +504,7 @@ EXPORT_SYMBOL_GPL(ocxl_config_set_afu_actag);
 
 int ocxl_config_get_pasid_info(struct pci_dev *dev, int *count)
 {
-	return pnv_ocxl_get_pasid_count(dev, count);
+	return ocxl_ops->get_pasid_count(dev, count);
 }
 EXPORT_SYMBOL_GPL(ocxl_config_get_pasid_info);
 
@@ -607,8 +575,7 @@ int ocxl_config_set_TL(struct pci_dev *dev, int tl_dvsec)
 	/*
 	 * Device -> host
 	 */
-	rc = pnv_ocxl_get_tl_cap(dev, &recv_cap, recv_rate,
-				PNV_OCXL_TL_RATE_BUF_SIZE);
+	rc = ocxl_ops->get_tl_cap(dev, &recv_cap, recv_rate, PNV_OCXL_TL_RATE_BUF_SIZE);
 	if (rc)
 		goto out;
 
@@ -638,7 +605,7 @@ int ocxl_config_set_TL(struct pci_dev *dev, int tl_dvsec)
 	pci_read_config_dword(dev, tl_dvsec + OCXL_DVSEC_TL_RECV_CAP + 4, &val);
 	recv_cap |= val;
 
-	rc = pnv_ocxl_set_tl_conf(dev, recv_cap, __pa(recv_rate),
+	rc = ocxl_ops->set_tl_conf(dev, recv_cap, __pa(recv_rate),
 				PNV_OCXL_TL_RATE_BUF_SIZE);
 	if (rc)
 		goto out;
@@ -691,7 +658,7 @@ int ocxl_config_terminate_pasid(struct pci_dev *dev, int afu_control, int pasid)
 			afu_control + OCXL_DVSEC_AFU_CTRL_TERM_PASID,
 			val);
 
-	timeout = jiffies + (HZ * OCXL_CFG_TIMEOUT);
+	timeout = jiffies + (HZ * CFG_TIMEOUT);
 	pci_read_config_dword(dev, afu_control + OCXL_DVSEC_AFU_CTRL_TERM_PASID,
 			&val);
 	while (EXTRACT_BIT(val, 20)) {

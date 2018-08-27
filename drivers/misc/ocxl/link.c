@@ -239,13 +239,13 @@ static irqreturn_t xsl_fault_handler(int irq, void *data)
 
 static void unmap_irq_registers(struct spa *spa)
 {
-	pnv_ocxl_unmap_xsl_regs(spa->reg_dsisr, spa->reg_dar, spa->reg_tfc,
+	ocxl_ops->unmap_xsl_regs(spa->reg_dsisr, spa->reg_dar, spa->reg_tfc,
 				spa->reg_pe_handle);
 }
 
 static int map_irq_registers(struct pci_dev *dev, struct spa *spa)
 {
-	return pnv_ocxl_map_xsl_regs(dev, &spa->reg_dsisr, &spa->reg_dar,
+	return ocxl_ops->map_xsl_regs(dev, &spa->reg_dsisr, &spa->reg_dar,
 				&spa->reg_tfc, &spa->reg_pe_handle);
 }
 
@@ -255,7 +255,7 @@ static int setup_xsl_irq(struct pci_dev *dev, struct link *link)
 	int rc;
 	int hwirq;
 
-	rc = pnv_ocxl_get_xsl_irq(dev, &hwirq);
+	rc = ocxl_ops->get_xsl_irq(dev, &hwirq);
 	if (rc)
 		return rc;
 
@@ -376,7 +376,7 @@ static int alloc_link(struct pci_dev *dev, int PE_mask, struct link **out_link)
 		goto err_spa;
 
 	/* platform specific hook */
-	rc = pnv_ocxl_spa_setup(dev, link->spa->spa_mem, PE_mask,
+	rc = ocxl_ops->spa_setup(dev, link->spa->spa_mem, PE_mask,
 				&link->platform_data);
 	if (rc)
 		goto err_xsl_irq;
@@ -434,7 +434,7 @@ static void release_xsl(struct kref *ref)
 
 	list_del(&link->list);
 	/* call platform code before releasing data */
-	pnv_ocxl_spa_release(link->platform_data);
+	ocxl_ops->spa_release(link->platform_data);
 	free_link(link);
 }
 

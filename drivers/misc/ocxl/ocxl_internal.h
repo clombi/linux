@@ -11,11 +11,38 @@
 #define MAX_IRQ_PER_LINK	2000
 #define MAX_IRQ_PER_CONTEXT	MAX_IRQ_PER_LINK
 
+#define CFG_TIMEOUT     3
+
+#define EXTRACT_BIT(val, bit) (!!(val & BIT(bit)))
+#define EXTRACT_BITS(val, s, e) ((val & GENMASK(e, s)) >> s)
+
 #define to_ocxl_function(d) container_of(d, struct ocxl_fn, dev)
 #define to_ocxl_afu(d) container_of(d, struct ocxl_afu, dev)
 
 extern struct pci_driver ocxl_pci_driver;
 
+
+struct ocxl_backend_ops {
+	struct module *module;
+	int (*alloc_xive_irq)(u32 *, u64 *);
+	int (*get_actag)(struct pci_dev *, u16 *, u16 *, u16 *);
+	int (*get_pasid_count)(struct pci_dev *, int *);
+	int (*get_tl_cap)(struct pci_dev *, long *, char *, int);
+	int (*get_xsl_irq)(struct pci_dev *, int *);
+	int (*map_xsl_regs)(struct pci_dev *, void __iomem **,
+			void __iomem **, void __iomem **,
+			void __iomem **);
+	int (*read_afu_info)(struct pci_dev *, struct ocxl_fn_config *,
+			int offset, u32 *);
+	int (*set_tl_conf)(struct pci_dev *, long, uint64_t, int);
+	void (*spa_release)(void *);
+	int (*spa_setup)(struct pci_dev *, void *, int, void **);
+	void (*unmap_xsl_regs)(void __iomem *, void __iomem *,
+			void __iomem *, void __iomem *);
+};
+extern const struct ocxl_backend_ops ocxl_native_ops;
+extern const struct ocxl_backend_ops ocxl_guest_ops;
+extern const struct ocxl_backend_ops *ocxl_ops;
 
 struct ocxl_fn {
 	struct device dev;
@@ -92,6 +119,8 @@ struct ocxl_process_element {
 	__be32 software_state;
 };
 
+extern int ocxl_find_dvsec(struct pci_dev *dev, int dvsec_id);
+extern int ocxl_find_dvsec_afu_ctrl(struct pci_dev *dev, u8 afu_idx);
 
 extern struct ocxl_afu *ocxl_afu_get(struct ocxl_afu *afu);
 extern void ocxl_afu_put(struct ocxl_afu *afu);
