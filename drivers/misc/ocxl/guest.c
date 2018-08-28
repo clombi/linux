@@ -9,14 +9,17 @@
 
 #define TL_P9_RECV_CAP         0x000000000000000Full
 
-#define AFU_PRESENT (1 << 31)
-#define AFU_INDEX_MASK 0x3F000000
-#define AFU_INDEX_SHIFT 24
-#define ACTAG_MASK 0xFFF
+#define AFU_PRESENT            (1 << 31)
+#define AFU_INDEX_MASK         0x3F000000
+#define AFU_INDEX_SHIFT        24
+#define ACTAG_MASK             0xFFF
 
-#define TEMPL_LEN            	0x58
+#define TEMPL_LEN              0x58
 
 #define STORE_LE32(addr, val)   (*(u32 *)addr = val)
+
+#define PASID_BITS             15
+#define PASID_MAX              ((1 << PASID_BITS) - 1)
 
 u8 *afud_temp0;
 
@@ -32,15 +35,15 @@ static void set_templ_rate(unsigned int templ, unsigned int rate, char *buf)
 
 static int ocxl_guest_alloc_xive_irq(u32 *irq, u64 *trigger_addr)
 {
-        u32 hwirq;
+	u32 hwirq;
 
-        hwirq = 0;  /* TO DO */ 
-        if (!hwirq)
-                return -ENOENT;
+	hwirq = 0;  /* TO DO */ 
+	if (!hwirq)
+		return -ENOENT;
 
-        *irq = hwirq;
-        *trigger_addr = 0x0600000000000000uLL; /* TO DO */
-        return 0;
+	*irq = hwirq;
+	*trigger_addr = 0x0600000000000000uLL; /* TO DO */
+	return 0;
 
 }
 
@@ -87,6 +90,7 @@ static int ocxl_guest_get_actag(struct pci_dev *dev, u16 *base, u16 *enabled,
 
 static int ocxl_guest_get_pasid_count(struct pci_dev *dev, int *count)
 {
+*count = PASID_MAX;
 	return 0;
 }
 
@@ -167,14 +171,14 @@ static int ocxl_guest_read_afu_info(struct pci_dev *dev, struct ocxl_fn_config *
 {
 	if (!afud_temp0) {
 		afud_temp0 = kzalloc(TEMPL_LEN, GFP_KERNEL);
-        	STORE_LE32((u32 *)&afud_temp0[0x0], 0x00580005);
-        	STORE_LE32((u32 *)&afud_temp0[0x4], 0x49424d2c);
-        	STORE_LE32((u32 *)&afud_temp0[0x8], 0x4d454d43);
-        	STORE_LE32((u32 *)&afud_temp0[0xC], 0x50593300);
-        	STORE_LE32((u32 *)&afud_temp0[0x10], 0x00000000);
-        	STORE_LE32((u32 *)&afud_temp0[0x14], 0x00000000);
-        	STORE_LE32((u32 *)&afud_temp0[0x18], 0x00000000);
-        	STORE_LE32((u32 *)&afud_temp0[0x1C], 0x01002401);
+		STORE_LE32((u32 *)&afud_temp0[0x0], 0x00580005);
+		STORE_LE32((u32 *)&afud_temp0[0x4], 0x49424d2c);
+		STORE_LE32((u32 *)&afud_temp0[0x8], 0x4d454d43);
+		STORE_LE32((u32 *)&afud_temp0[0xC], 0x50593300);
+		STORE_LE32((u32 *)&afud_temp0[0x10], 0x00000000);
+		STORE_LE32((u32 *)&afud_temp0[0x14], 0x00000000);
+		STORE_LE32((u32 *)&afud_temp0[0x18], 0x00000000);
+		STORE_LE32((u32 *)&afud_temp0[0x1C], 0x01002401);
 		STORE_LE32((u32 *)&afud_temp0[0x20], 0x00000000);
 		STORE_LE32((u32 *)&afud_temp0[0x24], 0x00000000);
 		STORE_LE32((u32 *)&afud_temp0[0x28], 0x02000000);
