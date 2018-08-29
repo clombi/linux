@@ -4,6 +4,41 @@
 #include <misc/ocxl-config.h>
 #include "ocxl_internal.h"
 
+#define SPA_CFG_SF              (1ull << (63-0))
+#define SPA_CFG_TA              (1ull << (63-1))
+#define SPA_CFG_HV              (1ull << (63-3))
+#define SPA_CFG_UV              (1ull << (63-4))
+#define SPA_CFG_XLAT_hpt        (0ull << (63-6)) /* Hashed page table (HPT) mode */
+#define SPA_CFG_XLAT_roh        (2ull << (63-6)) /* Radix on HPT mode */
+#define SPA_CFG_XLAT_ror        (3ull << (63-6)) /* Radix on Radix mode */
+#define SPA_CFG_PR              (1ull << (63-49))
+#define SPA_CFG_TC              (1ull << (63-54))
+#define SPA_CFG_DR              (1ull << (63-59))
+
+
+static u64 calculate_cfg_state(bool kernel)
+{
+	u64 state;
+
+	state = SPA_CFG_DR;
+	if (mfspr(SPRN_LPCR) & LPCR_TC)
+		state |= SPA_CFG_TC;
+	if (radix_enabled())
+		state |= SPA_CFG_XLAT_ror;
+	else
+		state |= SPA_CFG_XLAT_hpt;
+	state |= SPA_CFG_HV;
+	if (kernel) {
+		if (mfmsr() & MSR_SF)
+			state |= SPA_CFG_SF;
+	} else {
+		state |= SPA_CFG_PR;
+		if (!test_tsk_thread_flag(current, TIF_32BIT))
+			state |= SPA_CFG_SF;
+	}
+	return state;
+}
+
 static int ocxl_native_alloc_xive_irq(u32 *irq, u64 *trigger_addr)
 {
 	return pnv_ocxl_alloc_xive_irq(irq, trigger_addr);
@@ -72,6 +107,16 @@ static int ocxl_native_read_afu_info(struct pci_dev *dev, struct ocxl_fn_config 
 	return 0;
 }
 
+static void ocxl_native_set_pe(struct ocxl_process_element *pe, u32 pidr,
+			       u32 tidr, u64 amr) 
+{
+	pe->config_state = cpu_to_be64(calculate_cfg_state(pidr == 0));
+	pe->lpid = cpu_to_be32(mfspr(SPRN_LPID));
+	pe->pid = cpu_to_be32(pidr);
+	pe->tid = cpu_to_be32(tidr);
+	pe->amr = cpu_to_be64(amr);
+}
+
 static int ocxl_native_set_tl_conf(struct pci_dev *dev, long cap,
 			uint64_t rate_buf_phys, int rate_buf_size)
 {
@@ -110,6 +155,7 @@ const struct ocxl_backend_ops ocxl_native_ops = {
 	.get_xsl_irq = ocxl_native_get_xsl_irq,
 	.map_xsl_regs = ocxl_native_map_xsl_regs,
 	.read_afu_info = ocxl_native_read_afu_info,
+	.set_pe = ocxl_native_set_pe,
 	.set_tl_conf = ocxl_native_set_tl_conf,
 	.spa_release = ocxl_native_spa_release,
 	.spa_remove_pe_from_cache = ocxl_native_spa_remove_pe_from_cache,

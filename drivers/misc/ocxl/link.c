@@ -15,19 +15,8 @@
 #define SPA_PE_MASK		SPA_PASID_MAX
 #define SPA_SPA_SIZE_LOG	22 /* Each SPA is 4 Mb */
 
-#define SPA_CFG_SF		(1ull << (63-0))
-#define SPA_CFG_TA		(1ull << (63-1))
-#define SPA_CFG_HV		(1ull << (63-3))
-#define SPA_CFG_UV		(1ull << (63-4))
-#define SPA_CFG_XLAT_hpt	(0ull << (63-6)) /* Hashed page table (HPT) mode */
-#define SPA_CFG_XLAT_roh	(2ull << (63-6)) /* Radix on HPT mode */
-#define SPA_CFG_XLAT_ror	(3ull << (63-6)) /* Radix on Radix mode */
-#define SPA_CFG_PR		(1ull << (63-49))
-#define SPA_CFG_TC		(1ull << (63-54))
-#define SPA_CFG_DR		(1ull << (63-59))
-
-#define SPA_XSL_TF		(1ull << (63-3))  /* Translation fault */
-#define SPA_XSL_S		(1ull << (63-38)) /* Store operation */
+#define SPA_XSL_TF              (1ull << (63-3))  /* Translation fault */
+#define SPA_XSL_S               (1ull << (63-38)) /* Store operation */
 
 #define SPA_PE_VALID		0x80000000
 
@@ -448,29 +437,6 @@ void ocxl_link_release(struct pci_dev *dev, void *link_handle)
 }
 EXPORT_SYMBOL_GPL(ocxl_link_release);
 
-static u64 calculate_cfg_state(bool kernel)
-{
-	u64 state;
-
-	state = SPA_CFG_DR;
-	if (mfspr(SPRN_LPCR) & LPCR_TC)
-		state |= SPA_CFG_TC;
-	if (radix_enabled())
-		state |= SPA_CFG_XLAT_ror;
-	else
-		state |= SPA_CFG_XLAT_hpt;
-	state |= SPA_CFG_HV;
-	if (kernel) {
-		if (mfmsr() & MSR_SF)
-			state |= SPA_CFG_SF;
-	} else {
-		state |= SPA_CFG_PR;
-		if (!test_tsk_thread_flag(current, TIF_32BIT))
-			state |= SPA_CFG_SF;
-	}
-	return state;
-}
-
 int ocxl_link_add_pe(void *link_handle, int pasid, u32 pidr, u32 tidr,
 		u64 amr, struct mm_struct *mm,
 		void (*xsl_err_cb)(void *data, u64 addr, u64 dsisr),
@@ -506,11 +472,7 @@ int ocxl_link_add_pe(void *link_handle, int pasid, u32 pidr, u32 tidr,
 	pe_data->xsl_err_data = xsl_err_data;
 
 	memset(pe, 0, sizeof(struct ocxl_process_element));
-	pe->config_state = cpu_to_be64(calculate_cfg_state(pidr == 0));
-	pe->lpid = cpu_to_be32(mfspr(SPRN_LPID));
-	pe->pid = cpu_to_be32(pidr);
-	pe->tid = cpu_to_be32(tidr);
-	pe->amr = cpu_to_be64(amr);
+	ocxl_ops->set_pe(pe, pidr, tidr, amr);
 	pe->software_state = cpu_to_be32(SPA_PE_VALID);
 
 	mm_context_add_copro(mm);

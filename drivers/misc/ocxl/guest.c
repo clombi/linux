@@ -203,6 +203,16 @@ static int ocxl_guest_read_afu_info(struct pci_dev *dev, struct ocxl_fn_config *
 	return 0;
 }
 
+static void ocxl_guest_set_pe(struct ocxl_process_element *pe, u32 pidr,
+                              u32 tidr, u64 amr)
+{
+	pe->config_state = 0;	/* TO DO */
+	pe->lpid = 0;		/* TO DO */
+	pe->pid = cpu_to_be32(pidr);
+	pe->tid = cpu_to_be32(tidr);
+	pe->amr = cpu_to_be64(amr);
+}
+
 static int ocxl_guest_set_tl_conf(struct pci_dev *dev, long cap,
 			uint64_t rate_buf_phys, int rate_buf_size)
 {
@@ -245,6 +255,7 @@ const struct ocxl_backend_ops ocxl_guest_ops = {
 	.get_xsl_irq = ocxl_guest_get_xsl_irq,
 	.map_xsl_regs = ocxl_guest_map_xsl_regs,
 	.read_afu_info = ocxl_guest_read_afu_info,
+	.set_pe = ocxl_guest_set_pe,
 	.set_tl_conf = ocxl_guest_set_tl_conf,
 	.spa_release = ocxl_guest_spa_release,
 	.spa_remove_pe_from_cache = ocxl_guest_spa_remove_pe_from_cache,

@@ -22,30 +22,6 @@
 extern struct pci_driver ocxl_pci_driver;
 
 
-struct ocxl_backend_ops {
-	struct module *module;
-	int (*alloc_xive_irq)(u32 *, u64 *);
-	void (*free_xive_irq)(u32);
-	int (*get_actag)(struct pci_dev *, u16 *, u16 *, u16 *);
-	int (*get_pasid_count)(struct pci_dev *, int *);
-	int (*get_tl_cap)(struct pci_dev *, long *, char *, int);
-	int (*get_xsl_irq)(struct pci_dev *, int *);
-	int (*map_xsl_regs)(struct pci_dev *, void __iomem **,
-			void __iomem **, void __iomem **,
-			void __iomem **);
-	int (*read_afu_info)(struct pci_dev *, struct ocxl_fn_config *,
-			int offset, u32 *);
-	int (*set_tl_conf)(struct pci_dev *, long, uint64_t, int);
-	void (*spa_release)(void *);
-	int (*spa_remove_pe_from_cache)(void *, int);
-	int (*spa_setup)(struct pci_dev *, void *, int, void **);
-	void (*unmap_xsl_regs)(void __iomem *, void __iomem *,
-			void __iomem *, void __iomem *);
-};
-extern const struct ocxl_backend_ops ocxl_native_ops;
-extern const struct ocxl_backend_ops ocxl_guest_ops;
-extern const struct ocxl_backend_ops *ocxl_ops;
-
 struct ocxl_fn {
 	struct device dev;
 	int bar_used[3];
@@ -120,6 +96,31 @@ struct ocxl_process_element {
 	__be32 reserved3[3];
 	__be32 software_state;
 };
+
+struct ocxl_backend_ops {
+        struct module *module;
+        int (*alloc_xive_irq)(u32 *, u64 *);
+        void (*free_xive_irq)(u32);
+        int (*get_actag)(struct pci_dev *, u16 *, u16 *, u16 *);
+        int (*get_pasid_count)(struct pci_dev *, int *);
+        int (*get_tl_cap)(struct pci_dev *, long *, char *, int);
+        int (*get_xsl_irq)(struct pci_dev *, int *);
+        int (*map_xsl_regs)(struct pci_dev *, void __iomem **,
+                        void __iomem **, void __iomem **,
+                        void __iomem **);
+        int (*read_afu_info)(struct pci_dev *, struct ocxl_fn_config *,
+                        int offset, u32 *);
+        void (*set_pe)(struct ocxl_process_element *, u32, u32, u64);
+        int (*set_tl_conf)(struct pci_dev *, long, uint64_t, int);
+        void (*spa_release)(void *);
+        int (*spa_remove_pe_from_cache)(void *, int);
+        int (*spa_setup)(struct pci_dev *, void *, int, void **);
+        void (*unmap_xsl_regs)(void __iomem *, void __iomem *,
+                        void __iomem *, void __iomem *);
+};
+extern const struct ocxl_backend_ops ocxl_native_ops;
+extern const struct ocxl_backend_ops ocxl_guest_ops;
+extern const struct ocxl_backend_ops *ocxl_ops;
 
 extern int ocxl_find_dvsec(struct pci_dev *dev, int dvsec_id);
 extern int ocxl_find_dvsec_afu_ctrl(struct pci_dev *dev, u8 afu_idx);
