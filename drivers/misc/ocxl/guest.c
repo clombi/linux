@@ -38,13 +38,17 @@ static int ocxl_guest_alloc_xive_irq(u32 *irq, u64 *trigger_addr)
 	u32 hwirq;
 
 	hwirq = 0;  /* TO DO */ 
-	if (!hwirq)
-		return -ENOENT;
 
 	*irq = hwirq;
 	*trigger_addr = 0x0600000000000000uLL; /* TO DO */
 	return 0;
 
+}
+
+static void ocxl_guest_free_xive_irq(u32 irq)
+{
+	/* TO DO */
+	return;
 }
 
 static int ocxl_guest_get_actag(struct pci_dev *dev, u16 *base, u16 *enabled,
@@ -210,6 +214,11 @@ static void ocxl_guest_spa_release(void *platform_data)
 	return;
 }
 
+static int ocxl_guest_spa_remove_pe_from_cache(void *platform_data, int pe_handle)
+{
+	return 0;
+}
+
 static int ocxl_guest_spa_setup(struct pci_dev *dev, void *spa_mem, int PE_mask,
 				void **platform_data)
 {
@@ -229,6 +238,7 @@ static void ocxl_guest_unmap_xsl_regs(void __iomem *dsisr, void __iomem *dar,
 const struct ocxl_backend_ops ocxl_guest_ops = {
 	.module = THIS_MODULE,
 	.alloc_xive_irq = ocxl_guest_alloc_xive_irq,
+	.free_xive_irq = ocxl_guest_free_xive_irq,
 	.get_actag = ocxl_guest_get_actag,
 	.get_pasid_count = ocxl_guest_get_pasid_count,
 	.get_tl_cap = ocxl_guest_get_tl_cap,
@@ -237,6 +247,7 @@ const struct ocxl_backend_ops ocxl_guest_ops = {
 	.read_afu_info = ocxl_guest_read_afu_info,
 	.set_tl_conf = ocxl_guest_set_tl_conf,
 	.spa_release = ocxl_guest_spa_release,
+	.spa_remove_pe_from_cache = ocxl_guest_spa_remove_pe_from_cache,
 	.spa_setup = ocxl_guest_spa_setup,
 	.unmap_xsl_regs = ocxl_guest_unmap_xsl_regs,
 };

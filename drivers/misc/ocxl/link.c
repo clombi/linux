@@ -573,7 +573,7 @@ int ocxl_link_update_pe(void *link_handle, int pasid, __u16 tid)
 	 * On powerpc, the entry needs to be cleared from the context
 	 * cache of the NPU.
 	 */
-	rc = pnv_ocxl_spa_remove_pe_from_cache(link->platform_data, pe_handle);
+	rc = ocxl_ops->spa_remove_pe_from_cache(link->platform_data, pe_handle);
 	WARN_ON(rc);
 
 	mutex_unlock(&spa->spa_lock);
@@ -635,7 +635,7 @@ int ocxl_link_remove_pe(void *link_handle, int pasid)
 	 * On powerpc, the entry needs to be cleared from the context
 	 * cache of the NPU.
 	 */
-	rc = pnv_ocxl_spa_remove_pe_from_cache(link->platform_data, pe_handle);
+	rc = ocxl_ops->spa_remove_pe_from_cache(link->platform_data, pe_handle);
 	WARN_ON(rc);
 
 	pe_data = radix_tree_delete(&spa->pe_tree, pe_handle);
@@ -661,7 +661,7 @@ int ocxl_link_irq_alloc(void *link_handle, int *hw_irq, u64 *trigger_addr)
 	if (atomic_dec_if_positive(&link->irq_available) < 0)
 		return -ENOSPC;
 
-	rc = pnv_ocxl_alloc_xive_irq(&irq, &addr);
+	rc = ocxl_ops->alloc_xive_irq(&irq, &addr);
 	if (rc) {
 		atomic_inc(&link->irq_available);
 		return rc;
@@ -677,7 +677,7 @@ void ocxl_link_free_irq(void *link_handle, int hw_irq)
 {
 	struct link *link = (struct link *) link_handle;
 
-	pnv_ocxl_free_xive_irq(hw_irq);
+	ocxl_ops->free_xive_irq(hw_irq);
 	atomic_inc(&link->irq_available);
 }
 EXPORT_SYMBOL_GPL(ocxl_link_free_irq);

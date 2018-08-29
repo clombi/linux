@@ -25,6 +25,7 @@ extern struct pci_driver ocxl_pci_driver;
 struct ocxl_backend_ops {
 	struct module *module;
 	int (*alloc_xive_irq)(u32 *, u64 *);
+	void (*free_xive_irq)(u32);
 	int (*get_actag)(struct pci_dev *, u16 *, u16 *, u16 *);
 	int (*get_pasid_count)(struct pci_dev *, int *);
 	int (*get_tl_cap)(struct pci_dev *, long *, char *, int);
@@ -36,6 +37,7 @@ struct ocxl_backend_ops {
 			int offset, u32 *);
 	int (*set_tl_conf)(struct pci_dev *, long, uint64_t, int);
 	void (*spa_release)(void *);
+	int (*spa_remove_pe_from_cache)(void *, int);
 	int (*spa_setup)(struct pci_dev *, void *, int, void **);
 	void (*unmap_xsl_regs)(void __iomem *, void __iomem *,
 			void __iomem *, void __iomem *);
