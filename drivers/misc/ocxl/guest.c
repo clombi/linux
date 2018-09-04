@@ -22,6 +22,7 @@
 #define PASID_MAX              ((1 << PASID_BITS) - 1)
 
 u8 *afud_temp0;
+u32 afu_hwirq;
 
 static void set_templ_rate(unsigned int templ, unsigned int rate, char *buf)
 {
@@ -35,11 +36,7 @@ static void set_templ_rate(unsigned int templ, unsigned int rate, char *buf)
 
 static int ocxl_guest_alloc_xive_irq(u32 *irq, u64 *trigger_addr)
 {
-	u32 hwirq;
-
-	hwirq = 0;  /* TO DO */ 
-
-	*irq = hwirq;
+	*irq = afu_hwirq;
 	*trigger_addr = 0x0600000000000000uLL; /* TO DO */
 	return 0;
 
@@ -47,7 +44,6 @@ static int ocxl_guest_alloc_xive_irq(u32 *irq, u64 *trigger_addr)
 
 static void ocxl_guest_free_xive_irq(u32 irq)
 {
-	/* TO DO */
 	return;
 }
 
@@ -130,6 +126,14 @@ static int ocxl_guest_get_xsl_irq(struct pci_dev *dev, int *hwirq)
 			"Can't get translation interrupt for device\n");
 		return rc;
 	}
+
+	rc = of_property_read_u32(dev->dev.of_node, "ibm,afu-irq", &afu_hwirq);
+	if (rc) {
+		dev_err(&dev->dev,
+			"Can't get afu interrupt for device\n");
+		return rc;
+	}
+
 	return 0;
 }
 
