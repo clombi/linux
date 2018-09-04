@@ -24,6 +24,7 @@
 #define OCXL_MAX_AFU_PER_FUNCTION 64
 #define OCXL_TEMPL_LEN            0x58
 #define OCXL_TEMPL_NAME_LEN       24
+#define OCXL_CFG_TIMEOUT     3
 
 int ocxl_find_dvsec(struct pci_dev *dev, int dvsec_id)
 {
@@ -242,6 +243,35 @@ int ocxl_config_read_function(struct pci_dev *dev, struct ocxl_fn_config *fn)
 }
 EXPORT_SYMBOL_GPL(ocxl_config_read_function);
 
+static int read_afu_info(struct pci_dev *dev, struct ocxl_fn_config *fn,
+			int offset, u32 *data)
+{
+	u32 val;
+	unsigned long timeout = jiffies + (HZ * OCXL_CFG_TIMEOUT);
+	int pos = fn->dvsec_afu_info_pos;
+
+	/* Protect 'data valid' bit */
+	if (EXTRACT_BIT(offset, 31)) {
+		dev_err(&dev->dev, "Invalid offset in AFU info DVSEC\n");
+		return -EINVAL;
+	}
+
+	pci_write_config_dword(dev, pos + OCXL_DVSEC_AFU_INFO_OFF, offset);
+	pci_read_config_dword(dev, pos + OCXL_DVSEC_AFU_INFO_OFF, &val);
+	while (!EXTRACT_BIT(val, 31)) {
+		if (time_after_eq(jiffies, timeout)) {
+			dev_err(&dev->dev,
+				"Timeout while reading AFU info DVSEC (offset=%d)\n",
+				offset);
+			return -EBUSY;
+		}
+		cpu_relax();
+		pci_read_config_dword(dev, pos + OCXL_DVSEC_AFU_INFO_OFF, &val);
+	}
+	pci_read_config_dword(dev, pos + OCXL_DVSEC_AFU_INFO_DATA, data);
+	return 0;
+}
+
 int ocxl_config_check_afu_index(struct pci_dev *dev,
 				struct ocxl_fn_config *fn, int afu_idx)
 {
@@ -249,7 +279,7 @@ int ocxl_config_check_afu_index(struct pci_dev *dev,
 	int rc, templ_major, templ_minor, len;
 
 	pci_write_config_word(dev, fn->dvsec_afu_info_pos + OCXL_DVSEC_AFU_INFO_AFU_IDX, afu_idx);
-	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_VERSION, &val);
+	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_VERSION, &val);
 	if (rc)
 		return rc;
 
@@ -280,7 +310,7 @@ static int read_afu_name(struct pci_dev *dev, struct ocxl_fn_config *fn,
 
 	BUILD_BUG_ON(OCXL_AFU_NAME_SZ < OCXL_TEMPL_NAME_LEN);
 	for (i = 0; i < OCXL_TEMPL_NAME_LEN; i += 4) {
-		rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_NAME + i, &val);
+		rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_NAME + i, &val);
 		if (rc)
 			return rc;
 		ptr = (u32 *) &afu->name[i];
@@ -299,18 +329,18 @@ static int read_afu_mmio(struct pci_dev *dev, struct ocxl_fn_config *fn,
 	/*
 	 * Global MMIO
 	 */
-	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_GLOBAL, &val);
+	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_GLOBAL, &val);
 	if (rc)
 		return rc;
 	afu->global_mmio_bar = EXTRACT_BITS(val, 0, 2);
 	afu->global_mmio_offset = EXTRACT_BITS(val, 16, 31) << 16;
 
-	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_GLOBAL + 4, &val);
+	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_GLOBAL + 4, &val);
 	if (rc)
 		return rc;
 	afu->global_mmio_offset += (u64) val << 32;
 
-	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_GLOBAL_SZ, &val);
+	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_GLOBAL_SZ, &val);
 	if (rc)
 		return rc;
 	afu->global_mmio_size = val;
@@ -318,18 +348,18 @@ static int read_afu_mmio(struct pci_dev *dev, struct ocxl_fn_config *fn,
 	/*
 	 * Per-process MMIO
 	 */
-	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_PP, &val);
+	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_PP, &val);
 	if (rc)
 		return rc;
 	afu->pp_mmio_bar = EXTRACT_BITS(val, 0, 2);
 	afu->pp_mmio_offset = EXTRACT_BITS(val, 16, 31) << 16;
 
-	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_PP + 4, &val);
+	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_PP + 4, &val);
 	if (rc)
 		return rc;
 	afu->pp_mmio_offset += (u64) val << 32;
 
-	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_PP_SZ, &val);
+	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MMIO_PP_SZ, &val);
 	if (rc)
 		return rc;
 	afu->pp_mmio_stride = val;
@@ -426,7 +456,7 @@ int ocxl_config_read_afu(struct pci_dev *dev, struct ocxl_fn_config *fn,
 	if (rc)
 		return rc;
 
-	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_AFU_VERSION, &val32);
+	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_AFU_VERSION, &val32);
 	if (rc)
 		return rc;
 	afu->version_major = EXTRACT_BITS(val32, 24, 31);
@@ -439,7 +469,7 @@ int ocxl_config_read_afu(struct pci_dev *dev, struct ocxl_fn_config *fn,
 	if (rc)
 		return rc;
 
-	rc = ocxl_ops->read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MEM_SZ, &val32);
+	rc = read_afu_info(dev, fn, OCXL_DVSEC_TEMPL_MEM_SZ, &val32);
 	if (rc)
 		return rc;
 	afu->log_mem_size = EXTRACT_BITS(val32, 0, 7);

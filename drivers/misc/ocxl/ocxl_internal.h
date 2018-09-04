@@ -108,8 +108,6 @@ struct ocxl_backend_ops {
         int (*map_xsl_regs)(struct pci_dev *, void __iomem **,
                         void __iomem **, void __iomem **,
                         void __iomem **);
-        int (*read_afu_info)(struct pci_dev *, struct ocxl_fn_config *,
-                        int offset, u32 *);
         void (*set_pe)(struct ocxl_process_element *, u32, u32, u64);
         int (*set_tl_conf)(struct pci_dev *, long, uint64_t, int);
         void (*spa_release)(void *);

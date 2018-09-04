@@ -78,35 +78,6 @@ static int ocxl_native_map_xsl_regs(struct pci_dev *dev, void __iomem **dsisr,
 	return pnv_ocxl_map_xsl_regs(dev, dsisr, dar, tfc, pe_handle);
 }
 
-static int ocxl_native_read_afu_info(struct pci_dev *dev, struct ocxl_fn_config *fn,
-				int offset, u32 *data)
-{
-	u32 val;
-	unsigned long timeout = jiffies + (HZ * CFG_TIMEOUT);
-	int pos = fn->dvsec_afu_info_pos;
-
-	/* Protect 'data valid' bit */
-	if (EXTRACT_BIT(offset, 31)) {
-		dev_err(&dev->dev, "Invalid offset in AFU info DVSEC\n");
-		return -EINVAL;
-	}
-
-	pci_write_config_dword(dev, pos + OCXL_DVSEC_AFU_INFO_OFF, offset);
-	pci_read_config_dword(dev, pos + OCXL_DVSEC_AFU_INFO_OFF, &val);
-	while (!EXTRACT_BIT(val, 31)) {
-		if (time_after_eq(jiffies, timeout)) {
-			dev_err(&dev->dev,
-				"Timeout while reading AFU info DVSEC (offset=%d)\n",
-				offset);
-			return -EBUSY;
-		}
-		cpu_relax();
-		pci_read_config_dword(dev, pos + OCXL_DVSEC_AFU_INFO_OFF, &val);
-	}
-	pci_read_config_dword(dev, pos + OCXL_DVSEC_AFU_INFO_DATA, data);
-	return 0;
-}
-
 static void ocxl_native_set_pe(struct ocxl_process_element *pe, u32 pidr,
 			       u32 tidr, u64 amr) 
 {
@@ -154,7 +125,6 @@ const struct ocxl_backend_ops ocxl_native_ops = {
 	.get_tl_cap = ocxl_native_get_tl_cap,
 	.get_xsl_irq = ocxl_native_get_xsl_irq,
 	.map_xsl_regs = ocxl_native_map_xsl_regs,
-	.read_afu_info = ocxl_native_read_afu_info,
 	.set_pe = ocxl_native_set_pe,
 	.set_tl_conf = ocxl_native_set_tl_conf,
 	.spa_release = ocxl_native_spa_release,

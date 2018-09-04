@@ -133,7 +133,6 @@ static int ocxl_guest_get_xsl_irq(struct pci_dev *dev, int *hwirq)
 			"Can't get afu interrupt for device\n");
 		return rc;
 	}
-
 	return 0;
 }
 
@@ -172,39 +171,6 @@ static int ocxl_guest_map_xsl_regs(struct pci_dev *dev, void __iomem **dsisr,
 		*pe_handle = regs[3];
 	}
 	return rc;
-}
-
-static int ocxl_guest_read_afu_info(struct pci_dev *dev, struct ocxl_fn_config *fn,
-			int offset, u32 *data)
-{
-	if (!afud_temp0) {
-		afud_temp0 = kzalloc(TEMPL_LEN, GFP_KERNEL);
-		STORE_LE32((u32 *)&afud_temp0[0x0], 0x00580005);
-		STORE_LE32((u32 *)&afud_temp0[0x4], 0x49424d2c);
-		STORE_LE32((u32 *)&afud_temp0[0x8], 0x4d454d43);
-		STORE_LE32((u32 *)&afud_temp0[0xC], 0x50593300);
-		STORE_LE32((u32 *)&afud_temp0[0x10], 0x00000000);
-		STORE_LE32((u32 *)&afud_temp0[0x14], 0x00000000);
-		STORE_LE32((u32 *)&afud_temp0[0x18], 0x00000000);
-		STORE_LE32((u32 *)&afud_temp0[0x1C], 0x01002401);
-		STORE_LE32((u32 *)&afud_temp0[0x20], 0x00000000);
-		STORE_LE32((u32 *)&afud_temp0[0x24], 0x00000000);
-		STORE_LE32((u32 *)&afud_temp0[0x28], 0x02000000);
-		STORE_LE32((u32 *)&afud_temp0[0x2C], 0x00000000);
-		STORE_LE32((u32 *)&afud_temp0[0x30], 0x02000000);
-		STORE_LE32((u32 *)&afud_temp0[0x34], 0x00000000);
-		STORE_LE32((u32 *)&afud_temp0[0x38], 0x00010000);
-		STORE_LE32((u32 *)&afud_temp0[0x3C], 0x0000001a);
-		STORE_LE32((u32 *)&afud_temp0[0x40], 0x00000000);
-		STORE_LE32((u32 *)&afud_temp0[0x44], 0x00000000);
-		STORE_LE32((u32 *)&afud_temp0[0x48], 0x00000000);
-		STORE_LE32((u32 *)&afud_temp0[0x4C], 0x00000000);
-		STORE_LE32((u32 *)&afud_temp0[0x50], 0x00000000);
-		STORE_LE32((u32 *)&afud_temp0[0x54], 0x00000000);
-	}
-
-	*data = be32_to_cpu((*(u32 *)(afud_temp0 + offset)));
-	return 0;
 }
 
 static void ocxl_guest_set_pe(struct ocxl_process_element *pe, u32 pidr,
@@ -258,7 +224,6 @@ const struct ocxl_backend_ops ocxl_guest_ops = {
 	.get_tl_cap = ocxl_guest_get_tl_cap,
 	.get_xsl_irq = ocxl_guest_get_xsl_irq,
 	.map_xsl_regs = ocxl_guest_map_xsl_regs,
-	.read_afu_info = ocxl_guest_read_afu_info,
 	.set_pe = ocxl_guest_set_pe,
 	.set_tl_conf = ocxl_guest_set_tl_conf,
 	.spa_release = ocxl_guest_spa_release,
