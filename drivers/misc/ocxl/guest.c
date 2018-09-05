@@ -177,13 +177,19 @@ static int ocxl_guest_map_xsl_regs(struct pci_dev *dev, void __iomem **dsisr,
 }
 
 static void ocxl_guest_set_pe(struct ocxl_process_element *pe, u32 pidr,
-                              u32 tidr, u64 amr)
+                              u32 tidr, u64 amr, struct pci_dev *pdev)
 {
 	pe->config_state = 0;	/* TO DO */
 	pe->lpid = 0;		/* TO DO */
 	pe->pid = cpu_to_be32(pidr);
 	pe->tid = cpu_to_be32(tidr);
 	pe->amr = cpu_to_be64(amr);
+
+	/* FIXME: let's provide our PIDR to the device. This is a temporary
+	 *        workaround until we SPA is implemented.
+	 */
+	pci_write_config_dword(pdev, 0xfe0, pidr);
+	dev_warn(&pdev->dev, "Passed PIDR=%d to device\n", pidr);
 }
 
 static int ocxl_guest_set_tl_conf(struct pci_dev *dev, long cap,

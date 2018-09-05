@@ -79,7 +79,7 @@ static int ocxl_native_map_xsl_regs(struct pci_dev *dev, void __iomem **dsisr,
 }
 
 static void ocxl_native_set_pe(struct ocxl_process_element *pe, u32 pidr,
-			       u32 tidr, u64 amr) 
+			       u32 tidr, u64 amr, struct pci_dev *pdev)
 {
 	pe->config_state = cpu_to_be64(calculate_cfg_state(pidr == 0));
 	pe->lpid = cpu_to_be32(mfspr(SPRN_LPID));

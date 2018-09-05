@@ -447,6 +447,7 @@ int ocxl_link_add_pe(void *link_handle, int pasid, u32 pidr, u32 tidr,
 	struct ocxl_process_element *pe;
 	int pe_handle, rc = 0;
 	struct pe_data *pe_data;
+	struct pci_dev *pdev;
 
 	BUILD_BUG_ON(sizeof(struct ocxl_process_element) != 128);
 	if (pasid > SPA_PASID_MAX)
@@ -472,7 +473,10 @@ int ocxl_link_add_pe(void *link_handle, int pasid, u32 pidr, u32 tidr,
 	pe_data->xsl_err_data = xsl_err_data;
 
 	memset(pe, 0, sizeof(struct ocxl_process_element));
-	ocxl_ops->set_pe(pe, pidr, tidr, amr);
+	pdev = pci_get_domain_bus_and_slot(link->domain, link->bus, link->dev);
+	BUG_ON(pdev == NULL);
+	ocxl_ops->set_pe(pe, pidr, tidr, amr, pdev);
+	pci_dev_put(pdev);
 	pe->software_state = cpu_to_be32(SPA_PE_VALID);
 
 	mm_context_add_copro(mm);
