@@ -314,7 +314,7 @@ static int read_afu_name(struct pci_dev *dev, struct ocxl_fn_config *fn,
 		if (rc)
 			return rc;
 		ptr = (u32 *) &afu->name[i];
-		*ptr = val;
+		*ptr = le32_to_cpu(val);
 	}
 	afu->name[OCXL_AFU_NAME_SZ - 1] = '\0'; /* play safe */
 	return 0;
