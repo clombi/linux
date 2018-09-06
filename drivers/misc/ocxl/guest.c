@@ -213,9 +213,24 @@ static int ocxl_guest_spa_setup(struct pci_dev *dev, void *spa_mem, int PE_mask,
 {
 	unsigned int delay, total_delay = 0;
 	long rc;
+	struct device_node *dn;
+	struct pci_dn *pdn;
+	u64 buid;
+	int bus, devfn;
+	uint32_t config_addr;
+
+	dn = pci_device_to_OF_node(dev);
+	pdn = PCI_DN(dn);
+	buid = pdn->phb->buid;
+
+	bus = dev->bus->number;
+	devfn = dev->devfn;
+	config_addr = ((bus & 0xFF) << 16) + ((devfn & 0xFF) << 8);
+
+	pr_debug("%s - buid: %#llx, bus: %d, devfn: %d, config_addr: %#x\n", __func__, buid, bus, devfn, config_addr);
 
 	while (1) {
-		rc = plpar_hcall_norets(H_SPA_SETUP, virt_to_phys(spa_mem));
+		rc = plpar_hcall_norets(H_SPA_SETUP, virt_to_phys(spa_mem), buid, config_addr);
 
 		if (rc != H_BUSY && !H_IS_LONG_BUSY(rc))
 			break;
@@ -235,7 +250,7 @@ static int ocxl_guest_spa_setup(struct pci_dev *dev, void *spa_mem, int PE_mask,
 	};
 
 	if (rc)
-		pr_err("H_SPA_SETUP failed %ld\n", rc);
+		pr_err("H_SPA_SETUP failed (%ld)\n", rc);
 
 	*platform_data = NULL;
 	return rc;
