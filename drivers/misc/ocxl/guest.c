@@ -21,7 +21,10 @@
 #define PASID_BITS             15
 #define PASID_MAX              ((1 << PASID_BITS) - 1)
 
-u8 *afud_temp0;
+#define HCALL_TIMEOUT          60000
+#define H_SPA_SETUP            0xf003
+
+/* temporarly solution */
 u32 afu_hwirq;
 
 static void set_templ_rate(unsigned int templ, unsigned int rate, char *buf)
@@ -202,8 +205,34 @@ static int ocxl_guest_spa_remove_pe_from_cache(void *platform_data, int pe_handl
 static int ocxl_guest_spa_setup(struct pci_dev *dev, void *spa_mem, int PE_mask,
 				void **platform_data)
 {
+	unsigned int delay, total_delay = 0;
+	long rc;
+
+	while (1) {
+		rc = plpar_hcall_norets(H_SPA_SETUP, virt_to_phys(spa_mem));
+
+		if (rc != H_BUSY && !H_IS_LONG_BUSY(rc))
+			break;
+
+		if (rc == H_BUSY)
+			delay = 10;
+		else
+			delay = get_longbusy_msecs(rc);
+
+		total_delay += delay;
+		if (total_delay > HCALL_TIMEOUT) {
+			WARN(1, "Warning: Giving up waiting for hcall H_SPA_SETUP after %u msec\n", total_delay);
+			rc = H_BUSY;
+			break;
+		}
+		mdelay(delay);
+	};
+
+	if (rc)
+		pr_err("H_SPA_SETUP failed %ld\n", rc);
+
 	*platform_data = NULL;
-	return 0;
+	return rc;
 }
 
 static void ocxl_guest_unmap_xsl_regs(void __iomem *dsisr, void __iomem *dar,
