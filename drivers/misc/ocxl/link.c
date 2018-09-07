@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 // Copyright 2017 IBM Corp.
+#define DEBUG 1
 #include <linux/sched/mm.h>
 #include <linux/mutex.h>
 #include <linux/mmu_context.h>
@@ -83,15 +84,37 @@ enum xsl_response {
 	RESTART,
 };
 
+#define H_READ_XSL_REGS 0xf004
 
-static void read_irq(struct spa *spa, u64 *dsisr, u64 *dar, u64 *pe)
+static void read_irq(struct link *link, u64 *dsisr, u64 *dar, u64 *pe)
 {
+	struct spa *spa = link->spa;
 	u64 reg;
 
 	*dsisr = in_be64(spa->reg_dsisr);
 	*dar = in_be64(spa->reg_dar);
 	reg = in_be64(spa->reg_pe_handle);
 	*pe = reg & SPA_PE_MASK;
+
+	if (*dar)
+		return;
+
+	{
+		unsigned long retbuf[PLPAR_HCALL_BUFSIZE];
+		long rc;
+		struct guest_platform_data {
+			u64 buid;
+			u32 config_addr;
+		} *data = link->platform_data;
+
+		rc = plpar_hcall(H_READ_XSL_REGS, retbuf, data->buid,
+				 data->config_addr);
+		if (rc)
+			pr_err("H_READ_XSL_REGS failed (%ld)\n", rc);
+
+		*dsisr = retbuf[0];
+		*dar = retbuf[1];
+	}
 }
 
 static void ack_irq(struct spa *spa, enum xsl_response r)
@@ -174,7 +197,7 @@ static irqreturn_t xsl_fault_handler(int irq, void *data)
 	struct ocxl_process_element *pe;
 	int lpid, pid, tid;
 
-	read_irq(spa, &dsisr, &dar, &pe_handle);
+	read_irq(link, &dsisr, &dar, &pe_handle);
 	trace_ocxl_fault(spa->spa_mem, pe_handle, dsisr, dar, -1);
 
 	WARN_ON(pe_handle > SPA_PE_MASK);
@@ -277,7 +300,8 @@ static int setup_xsl_irq(struct pci_dev *dev, struct link *link)
 	rc = request_irq(spa->virq, xsl_fault_handler, 0, spa->irq_name,
 			link);
 	if (rc) {
-		irq_dispose_mapping(spa->virq);
+		if (rc != -EBUSY)
+			irq_dispose_mapping(spa->virq);
 		kfree(spa->irq_name);
 		unmap_irq_registers(spa);
 		dev_err(&dev->dev,

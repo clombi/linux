@@ -23,7 +23,12 @@
 
 #define HCALL_TIMEOUT          60000
 #define H_SPA_SETUP            0xf003
-#define H_IRQ_INFO             0xf004
+#define H_IRQ_INFO             0xf005
+
+struct guest_platform_data {
+	u64 buid;
+	u32 config_addr;
+};
 
 /* temporarly solution */
 u32 afu_hwirq;
@@ -136,7 +141,7 @@ static int ocxl_guest_get_actag(struct pci_dev *dev, u16 *base, u16 *enabled,
 
 static int ocxl_guest_get_pasid_count(struct pci_dev *dev, int *count)
 {
-*count = PASID_MAX;
+	*count = PASID_MAX;
 	return 0;
 }
 
@@ -252,23 +257,27 @@ static int ocxl_guest_spa_setup(struct pci_dev *dev, void *spa_mem, int PE_mask,
 	long rc;
 	struct device_node *dn;
 	struct pci_dn *pdn;
-	u64 buid;
 	int bus, devfn;
-	uint32_t config_addr;
+	struct guest_platform_data *data;
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
 
 	dn = pci_device_to_OF_node(dev);
 	pdn = PCI_DN(dn);
-	buid = pdn->phb->buid;
+	data->buid = pdn->phb->buid;
 
 	bus = dev->bus->number;
 	devfn = dev->devfn;
-	config_addr = ((bus & 0xFF) << 16) + ((devfn & 0xFF) << 8);
+	data->config_addr = ((bus & 0xFF) << 16) + ((devfn & 0xFF) << 8);
 
 	pr_debug("%s - buid: %#llx, bus: %d, devfn: %d, config_addr: %#x\n",
-		 __func__, buid, bus, devfn, config_addr);
+		 __func__, data->buid, bus, devfn, data->config_addr);
 
 	while (1) {
-		rc = plpar_hcall_norets(H_SPA_SETUP, buid, config_addr,
+		rc = plpar_hcall_norets(H_SPA_SETUP, data->buid,
+					data->config_addr,
 					virt_to_phys(spa_mem));
 
 		if (rc != H_BUSY && !H_IS_LONG_BUSY(rc))
@@ -288,11 +297,14 @@ static int ocxl_guest_spa_setup(struct pci_dev *dev, void *spa_mem, int PE_mask,
 		mdelay(delay);
 	};
 
-	if (rc)
+	if (rc) {
 		pr_err("H_SPA_SETUP failed (%ld)\n", rc);
+		kfree(data);
+		return -EINVAL;
+	}
 
-	*platform_data = NULL;
-	return rc;
+	*platform_data = data;
+	return 0;
 }
 
 static void ocxl_guest_unmap_xsl_regs(void __iomem *dsisr, void __iomem *dar,
