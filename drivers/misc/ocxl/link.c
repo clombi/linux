@@ -621,13 +621,16 @@ EXPORT_SYMBOL_GPL(ocxl_link_remove_pe);
 int ocxl_link_irq_alloc(void *link_handle, int *hw_irq, u64 *trigger_addr)
 {
 	struct link *link = (struct link *) link_handle;
+	struct pci_dev *pdev;
 	int rc, irq;
 	u64 addr;
 
 	if (atomic_dec_if_positive(&link->irq_available) < 0)
 		return -ENOSPC;
 
-	rc = ocxl_ops->alloc_xive_irq(&irq, &addr);
+	pdev = pci_get_domain_bus_and_slot(link->domain, link->bus, link->dev);
+	BUG_ON(pdev == NULL);
+	rc = ocxl_ops->alloc_xive_irq(pdev, &irq, &addr);
 	if (rc) {
 		atomic_inc(&link->irq_available);
 		return rc;

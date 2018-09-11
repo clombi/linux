@@ -99,7 +99,7 @@ struct ocxl_process_element {
 
 struct ocxl_backend_ops {
         struct module *module;
-        int (*alloc_xive_irq)(u32 *, u64 *);
+        int (*alloc_xive_irq)(struct pci_dev *, u32 *, u64 *);
         void (*free_xive_irq)(u32);
         int (*get_actag)(struct pci_dev *, u16 *, u16 *, u16 *);
         int (*get_pasid_count)(struct pci_dev *, int *);

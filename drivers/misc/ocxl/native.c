@@ -39,7 +39,8 @@ static u64 calculate_cfg_state(bool kernel)
 	return state;
 }
 
-static int ocxl_native_alloc_xive_irq(u32 *irq, u64 *trigger_addr)
+static int ocxl_native_alloc_xive_irq(struct pci_dev *pdev, u32 *irq,
+				      u64 *trigger_addr)
 {
 	return pnv_ocxl_alloc_xive_irq(irq, trigger_addr);
 }

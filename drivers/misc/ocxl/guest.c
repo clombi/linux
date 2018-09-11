@@ -23,6 +23,7 @@
 
 #define HCALL_TIMEOUT          60000
 #define H_SPA_SETUP            0xf003
+#define H_IRQ_INFO             0xf004
 
 /* temporarly solution */
 u32 afu_hwirq;
@@ -37,12 +38,54 @@ static void set_templ_rate(unsigned int templ, unsigned int rate, char *buf)
 	buf[idx] |= rate << shift;
 }
 
-static int ocxl_guest_alloc_xive_irq(u32 *irq, u64 *trigger_addr)
+static int ocxl_guest_alloc_xive_irq(struct pci_dev *dev, u32 *irq, u64 *trigger_addr)
 {
+	unsigned int delay, total_delay = 0;
+	long rc;
+	struct device_node *dn;
+	struct pci_dn *pdn;
+	u64 buid;
+	int bus, devfn;
+	uint32_t config_addr;
+
+	dn = pci_device_to_OF_node(dev);
+	pdn = PCI_DN(dn);
+	buid = pdn->phb->buid;
+
+	bus = dev->bus->number;
+	devfn = dev->devfn;
+	config_addr = ((bus & 0xFF) << 16) + ((devfn & 0xFF) << 8);
+
+	pr_debug("%s - buid: %#llx, bus: %d, devfn: %d, config_addr: %#x\n",
+		 __func__, buid, bus, devfn, config_addr);
+
+	while (1) {
+		rc = plpar_hcall_norets(H_IRQ_INFO, buid, config_addr,
+					afu_hwirq);
+
+		if (rc != H_BUSY && !H_IS_LONG_BUSY(rc))
+			break;
+
+		if (rc == H_BUSY)
+			delay = 10;
+		else
+			delay = get_longbusy_msecs(rc);
+
+		total_delay += delay;
+		if (total_delay > HCALL_TIMEOUT) {
+			WARN(1, "Warning: Giving up waiting for hcall H_IRQ_INFO after %u msec\n", total_delay);
+			rc = H_BUSY;
+			break;
+		}
+		mdelay(delay);
+	};
+
+	if (rc)
+		pr_err("H_IRQ_INFO failed (%ld)\n", rc);
+
 	*irq = afu_hwirq;
 	*trigger_addr = 0x0600000000000000uLL; /* TO DO */
-	return 0;
-
+	return rc;
 }
 
 static void ocxl_guest_free_xive_irq(u32 irq)
@@ -184,12 +227,6 @@ static void ocxl_guest_set_pe(struct ocxl_process_element *pe, u32 pidr,
 	pe->pid = cpu_to_be32(pidr);
 	pe->tid = cpu_to_be32(tidr);
 	pe->amr = cpu_to_be64(amr);
-
-	/* FIXME: let's provide our PIDR to the device. This is a temporary
-	 *        workaround until we SPA is implemented.
-	 */
-	pci_write_config_dword(pdev, 0xfe0, pidr);
-	dev_warn(&pdev->dev, "Passed PIDR=%d to device\n", pidr);
 }
 
 static int ocxl_guest_set_tl_conf(struct pci_dev *dev, long cap,
@@ -227,10 +264,12 @@ static int ocxl_guest_spa_setup(struct pci_dev *dev, void *spa_mem, int PE_mask,
 	devfn = dev->devfn;
 	config_addr = ((bus & 0xFF) << 16) + ((devfn & 0xFF) << 8);
 
-	pr_debug("%s - buid: %#llx, bus: %d, devfn: %d, config_addr: %#x\n", __func__, buid, bus, devfn, config_addr);
+	pr_debug("%s - buid: %#llx, bus: %d, devfn: %d, config_addr: %#x\n",
+		 __func__, buid, bus, devfn, config_addr);
 
 	while (1) {
-		rc = plpar_hcall_norets(H_SPA_SETUP, virt_to_phys(spa_mem), buid, config_addr);
+		rc = plpar_hcall_norets(H_SPA_SETUP, buid, config_addr,
+					virt_to_phys(spa_mem));
 
 		if (rc != H_BUSY && !H_IS_LONG_BUSY(rc))
 			break;
