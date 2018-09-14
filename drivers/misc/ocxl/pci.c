@@ -562,6 +562,9 @@ static int ocxl_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		}
 	}
 	dev_info(&dev->dev, "%d AFU(s) configured\n", afu_count);
+
+	if (afu_count)
+		ocxl_mdev_register(fn);
 	return 0;
 }
 
@@ -569,6 +572,9 @@ static void ocxl_remove(struct pci_dev *dev)
 {
 	struct ocxl_afu *afu, *tmp;
 	struct ocxl_fn *fn = pci_get_drvdata(dev);
+
+	if (!list_empty(&fn->afu_list))
+		ocxl_mdev_unregister(fn);
 
 	list_for_each_entry_safe(afu, tmp, &fn->afu_list, list) {
 		remove_afu(afu);
