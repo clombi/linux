@@ -98,24 +98,27 @@ struct ocxl_process_element {
 };
 
 struct ocxl_backend_ops {
-        struct module *module;
-        int (*alloc_xive_irq)(struct pci_dev *, u32 *, u64 *);
-        void (*free_xive_irq)(u32);
-        int (*get_actag)(struct pci_dev *, u16 *, u16 *, u16 *);
-        int (*get_pasid_count)(struct pci_dev *, int *);
-        int (*get_tl_cap)(struct pci_dev *, long *, char *, int);
-        int (*get_xsl_irq)(struct pci_dev *, int *);
-        int (*map_xsl_regs)(struct pci_dev *, void __iomem **,
-                        void __iomem **, void __iomem **,
-                        void __iomem **);
-        void (*set_pe)(struct ocxl_process_element *, u32, u32, u64,
-		       struct pci_dev *);
-        int (*set_tl_conf)(struct pci_dev *, long, uint64_t, int);
-        void (*spa_release)(void *);
-        int (*spa_remove_pe_from_cache)(void *, int);
-        int (*spa_setup)(struct pci_dev *, void *, int, void **);
-        void (*unmap_xsl_regs)(void __iomem *, void __iomem *,
-                        void __iomem *, void __iomem *);
+	struct module *module;
+	int (*alloc_xive_irq)(void *, u32 *, u64 *);
+	void (*free_xive_irq)(u32);
+	int (*get_actag)(struct pci_dev *, u16 *, u16 *, u16 *);
+	int (*get_pasid_count)(struct pci_dev *, int *);
+	int (*get_tl_cap)(struct pci_dev *, long *, char *, int);
+	int (*get_tl_rate_buf_size)(void);
+	int (*get_xsl_irq)(struct pci_dev *, int *);
+	int (*map_xsl_regs)(struct pci_dev *, void __iomem **,
+			    void __iomem **, void __iomem **,
+			    void __iomem **);
+	void (*read_irq)(void __iomem *, void __iomem *, void __iomem *,
+			 void *, u64 *, u64 *, u64 *);
+	void (*release_platform)(void *);
+	int (*remove_pe_from_cache)(void *, int);
+	void (*set_pe)(void *, int, struct ocxl_process_element *, u32,
+		       u32, u64);
+	int (*set_tl_conf)(struct pci_dev *, long, uint64_t, int);
+	int (*setup_platform)(struct pci_dev *, void *, int, void **);
+	void (*unmap_xsl_regs)(void __iomem *, void __iomem *,
+			       void __iomem *, void __iomem *);
 };
 extern const struct ocxl_backend_ops ocxl_native_ops;
 extern const struct ocxl_backend_ops ocxl_guest_ops;

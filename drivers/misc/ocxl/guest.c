@@ -16,22 +16,22 @@
 
 #define TEMPL_LEN              0x58
 
-#define STORE_LE32(addr, val)   (*(u32 *)addr = val)
-
 #define PASID_BITS             15
 #define PASID_MAX              ((1 << PASID_BITS) - 1)
 
-#define HCALL_TIMEOUT          60000
-#define H_SPA_SETUP            0xf003
-#define H_IRQ_INFO             0xf005
+#define H_IRQ_INFO             0xf003
+#define H_ATTACH_PE            0xf004
+#define H_READ_XSL_REGS        0xf005
 
-struct guest_platform_data {
+struct device_data {
 	u64 buid;
 	u32 config_addr;
 };
 
 /* temporarly solution */
-u32 afu_hwirq;
+int xsl_hwirq;
+int afu_hwirq[5];
+int irq_index = 0;
 
 static void set_templ_rate(unsigned int templ, unsigned int rate, char *buf)
 {
@@ -43,52 +43,23 @@ static void set_templ_rate(unsigned int templ, unsigned int rate, char *buf)
 	buf[idx] |= rate << shift;
 }
 
-static int ocxl_guest_alloc_xive_irq(struct pci_dev *dev, u32 *irq, u64 *trigger_addr)
+static int ocxl_guest_alloc_xive_irq(void *platform_data, u32 *irq,
+				     u64 *trigger_addr)
 {
-	unsigned int delay, total_delay = 0;
+	struct device_data {
+		u64 buid;
+		u32 config_addr;
+	} *data = platform_data;
 	long rc;
-	struct device_node *dn;
-	struct pci_dn *pdn;
-	u64 buid;
-	int bus, devfn;
-	uint32_t config_addr;
 
-	dn = pci_device_to_OF_node(dev);
-	pdn = PCI_DN(dn);
-	buid = pdn->phb->buid;
-
-	bus = dev->bus->number;
-	devfn = dev->devfn;
-	config_addr = ((bus & 0xFF) << 16) + ((devfn & 0xFF) << 8);
-
-	pr_debug("%s - buid: %#llx, bus: %d, devfn: %d, config_addr: %#x\n",
-		 __func__, buid, bus, devfn, config_addr);
-
-	while (1) {
-		rc = plpar_hcall_norets(H_IRQ_INFO, buid, config_addr,
-					afu_hwirq);
-
-		if (rc != H_BUSY && !H_IS_LONG_BUSY(rc))
-			break;
-
-		if (rc == H_BUSY)
-			delay = 10;
-		else
-			delay = get_longbusy_msecs(rc);
-
-		total_delay += delay;
-		if (total_delay > HCALL_TIMEOUT) {
-			WARN(1, "Warning: Giving up waiting for hcall H_IRQ_INFO after %u msec\n", total_delay);
-			rc = H_BUSY;
-			break;
-		}
-		mdelay(delay);
-	};
-
+	rc = plpar_hcall_norets(H_IRQ_INFO, data->buid,
+				data->config_addr, xsl_hwirq, afu_hwirq[irq_index]);
 	if (rc)
 		pr_err("H_IRQ_INFO failed (%ld)\n", rc);
 
-	*irq = afu_hwirq;
+	*irq = afu_hwirq[irq_index++];
+	if (irq_index == 5)
+		irq_index = 0;
 	*trigger_addr = 0x0600000000000000uLL; /* TO DO */
 	return rc;
 }
@@ -98,8 +69,8 @@ static void ocxl_guest_free_xive_irq(u32 irq)
 	return;
 }
 
-static int ocxl_guest_get_actag(struct pci_dev *dev, u16 *base, u16 *enabled,
-			       u16 *supported)
+static int ocxl_guest_get_actag(struct pci_dev *dev, u16 *base,
+				u16 *enabled, u16 *supported)
 {
 	int pos, afu_idx = -1, i;
 	u16 actag = 0, actag_sup, actag_sup_max = 0;
@@ -146,10 +117,8 @@ static int ocxl_guest_get_pasid_count(struct pci_dev *dev, int *count)
 }
 
 static int ocxl_guest_get_tl_cap(struct pci_dev *dev, long *cap,
-			char *rate_buf, int rate_buf_size)
+				 char *rate_buf, int rate_buf_size)
 {
-	if (rate_buf_size != TL_RATE_BUF_SIZE)
-		return -EINVAL;
 	/*
 	 * The TL capabilities are a characteristic of the NPU, so
 	 * we go with hard-coded values.
@@ -167,9 +136,14 @@ static int ocxl_guest_get_tl_cap(struct pci_dev *dev, long *cap,
 	return 0;
 }
 
+static int ocxl_guest_get_tl_rate_buf_size(void) {
+	return TL_RATE_BUF_SIZE;
+}
+
 static int ocxl_guest_get_xsl_irq(struct pci_dev *dev, int *hwirq)
 {
-	int rc;
+	int rc, i;
+	char name[20];
 
 	rc = of_property_read_u32(dev->dev.of_node, "ibm,xsl-irq", hwirq);
 	if (rc) {
@@ -177,12 +151,17 @@ static int ocxl_guest_get_xsl_irq(struct pci_dev *dev, int *hwirq)
 			"Can't get translation interrupt for device\n");
 		return rc;
 	}
+	xsl_hwirq = *hwirq;
 
-	rc = of_property_read_u32(dev->dev.of_node, "ibm,afu-irq", &afu_hwirq);
-	if (rc) {
-		dev_err(&dev->dev,
-			"Can't get afu interrupt for device\n");
-		return rc;
+	for (i = 0; i < 5; i++) {
+		sprintf(name, "ibm,afu-irq-%i", i);
+		rc = of_property_read_u32(dev->dev.of_node, name,
+					  &afu_hwirq[i]);
+		if (rc) {
+			dev_err(&dev->dev,
+				"Can't get afu interrupt for device\n");
+			return rc;
+		}
 	}
 	return 0;
 }
@@ -224,9 +203,59 @@ static int ocxl_guest_map_xsl_regs(struct pci_dev *dev, void __iomem **dsisr,
 	return rc;
 }
 
-static void ocxl_guest_set_pe(struct ocxl_process_element *pe, u32 pidr,
-                              u32 tidr, u64 amr, struct pci_dev *pdev)
+static void ocxl_guest_read_irq(void __iomem *reg_dsisr,
+				void __iomem *reg_dar,
+				void __iomem *reg_pe,
+				void *platform_data,
+				u64 *dsisr, u64 *dar, u64 *pe)
 {
+	unsigned long retbuf[PLPAR_HCALL_BUFSIZE];
+	long rc;
+	struct guest_platform_data {
+		u64 buid;
+		u32 config_addr;
+	} *data = platform_data;
+
+	rc = plpar_hcall(H_READ_XSL_REGS, retbuf, data->buid,
+			 data->config_addr);
+	if (rc)
+		pr_err("H_READ_XSL_REGS failed (%ld)\n", rc);
+	
+	*dsisr = retbuf[0];
+	*dar = retbuf[1];
+	*pe = retbuf[2];
+}
+
+static void ocxl_guest_release_platform(void *platform_data)
+{
+	struct device_data *data;
+
+	data = (struct device_data *)platform_data;
+	if (data)
+		kfree(data);
+}
+
+static int ocxl_guest_remove_pe_from_cache(void *platform_data,
+					   int pe_handle)
+{
+	return 0;
+}
+
+static void ocxl_guest_set_pe(void *platform_data, int pasid,
+			      struct ocxl_process_element *pe, u32 pidr,
+                              u32 tidr, u64 amr)
+{
+	struct device_data {
+		u64 buid;
+		u32 config_addr;
+	} *data = platform_data;
+	long rc;
+
+	rc = plpar_hcall_norets(H_ATTACH_PE, data->buid,
+				data->config_addr, pasid, pidr);
+	if (rc)
+		pr_err("H_ATTACH_PE failed (%ld)\n", rc);
+
 	pe->config_state = 0;	/* TO DO */
 	pe->lpid = 0;		/* TO DO */
 	pe->pid = cpu_to_be32(pidr);
@@ -235,30 +264,19 @@ static void ocxl_guest_set_pe(struct ocxl_process_element *pe, u32 pidr,
 }
 
 static int ocxl_guest_set_tl_conf(struct pci_dev *dev, long cap,
-			uint64_t rate_buf_phys, int rate_buf_size)
+				  uint64_t rate_buf_phys,
+				  int rate_buf_size)
 {
 	return 0;
 }
 
-static void ocxl_guest_spa_release(void *platform_data)
+static int ocxl_guest_setup_platform(struct pci_dev *dev, void *mem,
+				     int PE_mask, void **platform_data)
 {
-	return;
-}
-
-static int ocxl_guest_spa_remove_pe_from_cache(void *platform_data, int pe_handle)
-{
-	return 0;
-}
-
-static int ocxl_guest_spa_setup(struct pci_dev *dev, void *spa_mem, int PE_mask,
-				void **platform_data)
-{
-	unsigned int delay, total_delay = 0;
-	long rc;
 	struct device_node *dn;
 	struct pci_dn *pdn;
 	int bus, devfn;
-	struct guest_platform_data *data;
+	struct device_data *data;
 
 	data = kzalloc(sizeof(*data), GFP_KERNEL);
 	if (!data)
@@ -274,34 +292,6 @@ static int ocxl_guest_spa_setup(struct pci_dev *dev, void *spa_mem, int PE_mask,
 
 	pr_debug("%s - buid: %#llx, bus: %d, devfn: %d, config_addr: %#x\n",
 		 __func__, data->buid, bus, devfn, data->config_addr);
-
-	while (1) {
-		rc = plpar_hcall_norets(H_SPA_SETUP, data->buid,
-					data->config_addr,
-					virt_to_phys(spa_mem));
-
-		if (rc != H_BUSY && !H_IS_LONG_BUSY(rc))
-			break;
-
-		if (rc == H_BUSY)
-			delay = 10;
-		else
-			delay = get_longbusy_msecs(rc);
-
-		total_delay += delay;
-		if (total_delay > HCALL_TIMEOUT) {
-			WARN(1, "Warning: Giving up waiting for hcall H_SPA_SETUP after %u msec\n", total_delay);
-			rc = H_BUSY;
-			break;
-		}
-		mdelay(delay);
-	};
-
-	if (rc) {
-		pr_err("H_SPA_SETUP failed (%ld)\n", rc);
-		kfree(data);
-		return -EINVAL;
-	}
 
 	*platform_data = data;
 	return 0;
@@ -323,12 +313,14 @@ const struct ocxl_backend_ops ocxl_guest_ops = {
 	.get_actag = ocxl_guest_get_actag,
 	.get_pasid_count = ocxl_guest_get_pasid_count,
 	.get_tl_cap = ocxl_guest_get_tl_cap,
+	.get_tl_rate_buf_size = ocxl_guest_get_tl_rate_buf_size,
 	.get_xsl_irq = ocxl_guest_get_xsl_irq,
 	.map_xsl_regs = ocxl_guest_map_xsl_regs,
+	.read_irq = ocxl_guest_read_irq,
+	.release_platform = ocxl_guest_release_platform,
+	.remove_pe_from_cache = ocxl_guest_remove_pe_from_cache,
 	.set_pe = ocxl_guest_set_pe,
 	.set_tl_conf = ocxl_guest_set_tl_conf,
-	.spa_release = ocxl_guest_spa_release,
-	.spa_remove_pe_from_cache = ocxl_guest_spa_remove_pe_from_cache,
-	.spa_setup = ocxl_guest_spa_setup,
+	.setup_platform = ocxl_guest_setup_platform,
 	.unmap_xsl_regs = ocxl_guest_unmap_xsl_regs,
 };

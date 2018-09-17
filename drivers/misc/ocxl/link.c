@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0+
 // Copyright 2017 IBM Corp.
-#define DEBUG 1
 #include <linux/sched/mm.h>
 #include <linux/mutex.h>
 #include <linux/mmu_context.h>
 #include <asm/copro.h>
-#include <asm/pnv-ocxl.h>
 #include <misc/ocxl.h>
 #include "ocxl_internal.h"
 #include "trace.h"
@@ -16,8 +14,8 @@
 #define SPA_PE_MASK		SPA_PASID_MAX
 #define SPA_SPA_SIZE_LOG	22 /* Each SPA is 4 Mb */
 
-#define SPA_XSL_TF              (1ull << (63-3))  /* Translation fault */
-#define SPA_XSL_S               (1ull << (63-38)) /* Store operation */
+#define SPA_XSL_TF		(1ull << (63-3))  /* Translation fault */
+#define SPA_XSL_S		(1ull << (63-38)) /* Store operation */
 
 #define SPA_PE_VALID		0x80000000
 
@@ -84,37 +82,15 @@ enum xsl_response {
 	RESTART,
 };
 
-#define H_READ_XSL_REGS 0xf004
 
 static void read_irq(struct link *link, u64 *dsisr, u64 *dar, u64 *pe)
 {
-	struct spa *spa = link->spa;
 	u64 reg;
 
-	*dsisr = in_be64(spa->reg_dsisr);
-	*dar = in_be64(spa->reg_dar);
-	reg = in_be64(spa->reg_pe_handle);
+	ocxl_ops->read_irq(link->spa->reg_dsisr, link->spa->reg_dar,
+			   link->spa->reg_pe_handle,
+			   link->platform_data, dsisr, dar, &reg);
 	*pe = reg & SPA_PE_MASK;
-
-	if (*dar)
-		return;
-
-	{
-		unsigned long retbuf[PLPAR_HCALL_BUFSIZE];
-		long rc;
-		struct guest_platform_data {
-			u64 buid;
-			u32 config_addr;
-		} *data = link->platform_data;
-
-		rc = plpar_hcall(H_READ_XSL_REGS, retbuf, data->buid,
-				 data->config_addr);
-		if (rc)
-			pr_err("H_READ_XSL_REGS failed (%ld)\n", rc);
-
-		*dsisr = retbuf[0];
-		*dar = retbuf[1];
-	}
 }
 
 static void ack_irq(struct spa *spa, enum xsl_response r)
@@ -251,8 +227,8 @@ static irqreturn_t xsl_fault_handler(int irq, void *data)
 
 static void unmap_irq_registers(struct spa *spa)
 {
-	ocxl_ops->unmap_xsl_regs(spa->reg_dsisr, spa->reg_dar, spa->reg_tfc,
-				spa->reg_pe_handle);
+	ocxl_ops->unmap_xsl_regs(spa->reg_dsisr, spa->reg_dar,
+				 spa->reg_tfc, spa->reg_pe_handle);
 }
 
 static int map_irq_registers(struct pci_dev *dev, struct spa *spa)
@@ -389,8 +365,8 @@ static int alloc_link(struct pci_dev *dev, int PE_mask, struct link **out_link)
 		goto err_spa;
 
 	/* platform specific hook */
-	rc = ocxl_ops->spa_setup(dev, link->spa->spa_mem, PE_mask,
-				&link->platform_data);
+	rc = ocxl_ops->setup_platform(dev, link->spa->spa_mem, PE_mask,
+				      &link->platform_data);
 	if (rc)
 		goto err_xsl_irq;
 
@@ -447,7 +423,7 @@ static void release_xsl(struct kref *ref)
 
 	list_del(&link->list);
 	/* call platform code before releasing data */
-	ocxl_ops->spa_release(link->platform_data);
+	ocxl_ops->release_platform(link->platform_data);
 	free_link(link);
 }
 
@@ -471,7 +447,6 @@ int ocxl_link_add_pe(void *link_handle, int pasid, u32 pidr, u32 tidr,
 	struct ocxl_process_element *pe;
 	int pe_handle, rc = 0;
 	struct pe_data *pe_data;
-	struct pci_dev *pdev;
 
 	BUILD_BUG_ON(sizeof(struct ocxl_process_element) != 128);
 	if (pasid > SPA_PASID_MAX)
@@ -497,10 +472,7 @@ int ocxl_link_add_pe(void *link_handle, int pasid, u32 pidr, u32 tidr,
 	pe_data->xsl_err_data = xsl_err_data;
 
 	memset(pe, 0, sizeof(struct ocxl_process_element));
-	pdev = pci_get_domain_bus_and_slot(link->domain, link->bus, link->dev);
-	BUG_ON(pdev == NULL);
-	ocxl_ops->set_pe(pe, pidr, tidr, amr, pdev);
-	pci_dev_put(pdev);
+	ocxl_ops->set_pe(link->platform_data, pasid, pe, pidr, tidr, amr);
 	pe->software_state = cpu_to_be32(SPA_PE_VALID);
 
 	mm_context_add_copro(mm);
@@ -563,7 +535,7 @@ int ocxl_link_update_pe(void *link_handle, int pasid, __u16 tid)
 	 * On powerpc, the entry needs to be cleared from the context
 	 * cache of the NPU.
 	 */
-	rc = ocxl_ops->spa_remove_pe_from_cache(link->platform_data, pe_handle);
+	rc = ocxl_ops->remove_pe_from_cache(link->platform_data, pe_handle);
 	WARN_ON(rc);
 
 	mutex_unlock(&spa->spa_lock);
@@ -625,7 +597,7 @@ int ocxl_link_remove_pe(void *link_handle, int pasid)
 	 * On powerpc, the entry needs to be cleared from the context
 	 * cache of the NPU.
 	 */
-	rc = ocxl_ops->spa_remove_pe_from_cache(link->platform_data, pe_handle);
+	rc = ocxl_ops->remove_pe_from_cache(link->platform_data, pe_handle);
 	WARN_ON(rc);
 
 	pe_data = radix_tree_delete(&spa->pe_tree, pe_handle);
@@ -645,16 +617,13 @@ EXPORT_SYMBOL_GPL(ocxl_link_remove_pe);
 int ocxl_link_irq_alloc(void *link_handle, int *hw_irq, u64 *trigger_addr)
 {
 	struct link *link = (struct link *) link_handle;
-	struct pci_dev *pdev;
 	int rc, irq;
 	u64 addr;
 
 	if (atomic_dec_if_positive(&link->irq_available) < 0)
 		return -ENOSPC;
 
-	pdev = pci_get_domain_bus_and_slot(link->domain, link->bus, link->dev);
-	BUG_ON(pdev == NULL);
-	rc = ocxl_ops->alloc_xive_irq(pdev, &irq, &addr);
+	rc = ocxl_ops->alloc_xive_irq(link->platform_data, &irq, &addr);
 	if (rc) {
 		atomic_inc(&link->irq_available);
 		return rc;

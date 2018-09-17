@@ -3,7 +3,6 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/idr.h>
-#include <asm/pnv-ocxl.h>
 #include "ocxl_internal.h"
 
 /*
