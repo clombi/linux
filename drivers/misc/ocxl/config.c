@@ -576,7 +576,7 @@ int ocxl_config_set_TL(struct pci_dev *dev, int tl_dvsec)
 	int i, rc;
 	long recv_cap;
 	char *recv_rate;
-	int ret_buf_size;
+	int rate_buf_size;
 
 	/*
 	 * Skip on function != 0, as the TL can only be defined on 0
@@ -584,8 +584,8 @@ int ocxl_config_set_TL(struct pci_dev *dev, int tl_dvsec)
 	if (PCI_FUNC(dev->devfn) != 0)
 		return 0;
 
-	ret_buf_size = ocxl_ops->get_tl_rate_buf_size();
-	recv_rate = kzalloc(ret_buf_size, GFP_KERNEL);
+	rate_buf_size = ocxl_ops->get_tl_rate_buf_size();
+	recv_rate = kzalloc(rate_buf_size, GFP_KERNEL);
 	if (!recv_rate)
 		return -ENOMEM;
 	/*
@@ -606,11 +606,11 @@ int ocxl_config_set_TL(struct pci_dev *dev, int tl_dvsec)
 	/*
 	 * Device -> host
 	 */
-	rc = ocxl_ops->get_tl_cap(dev, &recv_cap, recv_rate, ret_buf_size);
+	rc = ocxl_ops->get_tl_cap(dev, &recv_cap, recv_rate, rate_buf_size);
 	if (rc)
 		goto out;
 
-	for (i = 0; i < ret_buf_size; i += 4) {
+	for (i = 0; i < rate_buf_size; i += 4) {
 		be32ptr = (__be32 *) &recv_rate[i];
 		pci_write_config_dword(dev,
 				tl_dvsec + OCXL_DVSEC_TL_SEND_RATE + i,
@@ -624,7 +624,7 @@ int ocxl_config_set_TL(struct pci_dev *dev, int tl_dvsec)
 	/*
 	 * Host -> device
 	 */
-	for (i = 0; i < ret_buf_size; i += 4) {
+	for (i = 0; i < rate_buf_size; i += 4) {
 		pci_read_config_dword(dev,
 				tl_dvsec + OCXL_DVSEC_TL_RECV_RATE + i,
 				&val);
@@ -637,7 +637,7 @@ int ocxl_config_set_TL(struct pci_dev *dev, int tl_dvsec)
 	recv_cap |= val;
 
 	rc = ocxl_ops->set_tl_conf(dev, recv_cap, __pa(recv_rate),
-				ret_buf_size);
+				rate_buf_size);
 	if (rc)
 		goto out;
 
