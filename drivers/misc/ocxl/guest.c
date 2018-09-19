@@ -53,14 +53,15 @@ static int ocxl_guest_alloc_xive_irq(void *platform_data, u32 *irq,
 	long rc;
 
 	rc = plpar_hcall_norets(H_IRQ_INFO, data->buid,
-				data->config_addr, xsl_hwirq, afu_hwirq[irq_index]);
+				data->config_addr, afu_hwirq[irq_index]);
 	if (rc)
 		pr_err("H_IRQ_INFO failed (%ld)\n", rc);
 
+	/* temporarly solution */
 	*irq = afu_hwirq[irq_index++];
 	if (irq_index == 5)
 		irq_index = 0;
-	*trigger_addr = 0x0600000000000000uLL; /* TO DO */
+	*trigger_addr = 0x0600000000000000uLL;
 	return rc;
 }
 
@@ -252,7 +253,8 @@ static void ocxl_guest_set_pe(void *platform_data, int pasid,
 	long rc;
 
 	rc = plpar_hcall_norets(H_ATTACH_PE, data->buid,
-				data->config_addr, pasid, pidr);
+				data->config_addr, pasid, pidr,
+				xsl_hwirq);
 	if (rc)
 		pr_err("H_ATTACH_PE failed (%ld)\n", rc);
 
