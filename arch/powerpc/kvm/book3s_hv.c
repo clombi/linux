@@ -4070,6 +4070,7 @@ static int kvmppc_core_init_vm_hv(struct kvm *kvm)
 	kvm->arch.debugfs_dir = debugfs_create_dir(buf, kvm_debugfs_dir);
 	kvmppc_mmu_debugfs_init(kvm);
 
+	pr_debug("KVM guest LPID %x\n", kvm->arch.lpid);
 	return 0;
 }
 
