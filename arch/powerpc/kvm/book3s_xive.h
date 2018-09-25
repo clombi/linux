@@ -90,6 +90,11 @@ struct kvmppc_xive_src_block {
 	struct kvmppc_xive_irq_state irq_state[KVMPPC_XICS_IRQ_PER_ICS];
 };
 
+struct kvmppc_xive;
+
+struct kvmppc_xive_ops {
+	int (*reset_mapped)(struct kvm *kvm, unsigned long guest_irq);
+};
 
 struct kvmppc_xive {
 	struct kvm *kvm;
@@ -131,6 +136,9 @@ struct kvmppc_xive {
 
 	/* VC base address for ESBs */
 	u64     vc_base;
+
+	struct kvmppc_xive_ops *ops;
+	struct vm_area_struct *vma;
 };
 
 #define KVMPPC_XIVE_Q_COUNT	8
