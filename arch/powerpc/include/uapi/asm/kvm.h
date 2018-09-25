@@ -679,6 +679,7 @@ struct kvm_ppc_cpu_char {
 #define KVM_DEV_XIVE_GRP_CTRL		2
 #define   KVM_DEV_XIVE_GET_ESB_FD	1
 #define   KVM_DEV_XIVE_GET_TIMA_FD	2
+#define   KVM_DEV_XIVE_VC_BASE		3
 
 /* Layout of 64-bit XIVE source attribute values */
 #define  KVM_XIVE_LEVEL_SENSITIVE	(1ULL << 0)

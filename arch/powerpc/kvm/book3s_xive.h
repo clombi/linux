@@ -125,6 +125,9 @@ struct kvmppc_xive {
 
 	/* Flags */
 	u8	single_escalation;
+
+	/* VC base address for ESBs */
+	u64     vc_base;
 };
 
 #define KVMPPC_XIVE_Q_COUNT	8
