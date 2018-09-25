@@ -57,6 +57,9 @@ struct kvmppc_xive_irq_state {
 	bool saved_p;
 	bool saved_q;
 	u8 saved_scan_prio;
+
+	/* Xive native */
+	u32 eisn;			/* Guest Effective IRQ number */
 };
 
 /* Select the "right" interrupt (IPI vs. passthrough) */

@@ -1452,6 +1452,7 @@ struct kvmppc_xive_src_block *kvmppc_xive_create_src_block(
 
 	for (i = 0; i < KVMPPC_XICS_IRQ_PER_ICS; i++) {
 		sb->irq_state[i].number = (bid << KVMPPC_XICS_ICS_SHIFT) | i;
+		sb->irq_state[i].eisn = 0;
 		sb->irq_state[i].guest_priority = MASKED;
 		sb->irq_state[i].saved_priority = MASKED;
 		sb->irq_state[i].act_priority = MASKED;
