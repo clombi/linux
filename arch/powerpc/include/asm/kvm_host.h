@@ -218,6 +218,7 @@ extern struct kvm_device_ops kvm_xics_ops;
 struct kvmppc_xive;
 struct kvmppc_xive_vcpu;
 extern struct kvm_device_ops kvm_xive_ops;
+extern struct kvm_device_ops kvm_xive_native_ops;
 
 struct kvmppc_passthru_irqmap;
 
@@ -437,6 +438,7 @@ struct kvmppc_passthru_irqmap {
 #define KVMPPC_IRQ_DEFAULT	0
 #define KVMPPC_IRQ_MPIC		1
 #define KVMPPC_IRQ_XICS		2 /* Includes a XIVE option */
+#define KVMPPC_IRQ_XIVE		3 /* XIVE native exploitation mode */
 
 #define MMIO_HPTE_CACHE_SIZE	4
 

@@ -1011,7 +1011,10 @@ static int kvmppc_book3s_init(void)
 #ifdef CONFIG_KVM_XIVE
 	if (xive_enabled()) {
 		kvmppc_xive_init_module();
+		kvmppc_xive_native_init_module();
 		kvm_register_device_ops(&kvm_xive_ops, KVM_DEV_TYPE_XICS);
+		kvm_register_device_ops(&kvm_xive_native_ops,
+					KVM_DEV_TYPE_XIVE);
 	} else
 #endif
 		kvm_register_device_ops(&kvm_xics_ops, KVM_DEV_TYPE_XICS);
@@ -1022,8 +1025,10 @@ static int kvmppc_book3s_init(void)
 static void kvmppc_book3s_exit(void)
 {
 #ifdef CONFIG_KVM_XICS
-	if (xive_enabled())
+	if (xive_enabled()) {
 		kvmppc_xive_exit_module();
+		kvmppc_xive_native_exit_module();
+	}
 #endif
 #ifdef CONFIG_KVM_BOOK3S_32_HANDLER
 	kvmppc_book3s_exit_pr();

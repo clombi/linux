@@ -12,6 +12,9 @@
 #ifdef CONFIG_KVM_XICS
 #include "book3s_xics.h"
 
+#define KVMPPC_XIVE_FIRST_IRQ	0
+#define KVMPPC_XIVE_NR_IRQS	KVMPPC_XICS_NR_IRQS
+
 /*
  * State for one guest irq source.
  *
