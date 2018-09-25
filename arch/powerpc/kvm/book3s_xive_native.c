@@ -34,6 +34,24 @@
 
 #include "book3s_xive.h"
 
+/*
+ * We still instanciate them here because we use some of the
+ * generated utility functions as well in this file.
+ */
+#define XIVE_RUNTIME_CHECKS
+#define X_PFX xive_vm_
+#define X_STATIC static
+#define X_STAT_PFX stat_vm_
+#define __x_tima		xive_tima
+#define __x_eoi_page(xd)	((void __iomem *)((xd)->eoi_mmio))
+#define __x_trig_page(xd)	((void __iomem *)((xd)->trig_mmio))
+#define __x_writeb	__raw_writeb
+#define __x_readw	__raw_readw
+#define __x_readq	__raw_readq
+#define __x_writeq	__raw_writeq
+
+#include "book3s_xive_native_template.c"
+
 static void xive_native_cleanup_queue(struct kvm_vcpu *vcpu, int prio)
 {
 	struct kvmppc_xive_vcpu *xc = vcpu->arch.xive_vcpu;
@@ -157,9 +175,88 @@ bail:
 	return rc;
 }
 
+static int kvmppc_xive_native_set_source(struct kvmppc_xive *xive, long irq,
+					 u64 addr)
+{
+	struct kvmppc_xive_src_block *sb;
+	struct kvmppc_xive_irq_state *state;
+	u64 __user *ubufp = (u64 __user *) addr;
+	u64 val;
+	u16 idx;
+
+	pr_devel("%s irq=0x%lx\n", __func__, irq);
+
+	if (irq < KVMPPC_XIVE_FIRST_IRQ || irq >= KVMPPC_XIVE_NR_IRQS)
+		return -ENOENT;
+
+	sb = kvmppc_xive_find_source(xive, irq, &idx);
+	if (!sb) {
+		pr_debug("No source, creating source block...\n");
+		sb = kvmppc_xive_create_src_block(xive, irq);
+		if (!sb) {
+			pr_err("Failed to create block...\n");
+			return -ENOMEM;
+		}
+	}
+	state = &sb->irq_state[idx];
+
+	if (get_user(val, ubufp)) {
+		pr_err("fault getting user info !\n");
+		return -EFAULT;
+	}
+
+	/*
+	 * If the source doesn't already have an IPI, allocate
+	 * one and get the corresponding data
+	 */
+	if (!state->ipi_number) {
+		state->ipi_number = xive_native_alloc_irq();
+		if (state->ipi_number == 0) {
+			pr_err("Failed to allocate IRQ !\n");
+			return -ENOMEM;
+		}
+		xive_native_populate_irq_data(state->ipi_number,
+					      &state->ipi_data);
+		pr_debug("%s allocated hw_irq=0x%x for irq=0x%lx\n", __func__,
+			 state->ipi_number, irq);
+	}
+
+	arch_spin_lock(&sb->lock);
+
+	/* Restore LSI state */
+	if (val & KVM_XIVE_LEVEL_SENSITIVE) {
+		state->lsi = true;
+		if (val & KVM_XIVE_LEVEL_ASSERTED)
+			state->asserted = true;
+		pr_devel("  LSI ! Asserted=%d\n", state->asserted);
+	}
+
+	/* Mask IRQ to start with */
+	state->act_server = 0;
+	state->act_priority = MASKED;
+	xive_vm_esb_load(&state->ipi_data, XIVE_ESB_SET_PQ_01);
+	xive_native_configure_irq(state->ipi_number, 0, MASKED, 0);
+
+	/* Increment the number of valid sources and mark this one valid */
+	if (!state->valid)
+		xive->src_count++;
+	state->valid = true;
+
+	arch_spin_unlock(&sb->lock);
+
+	return 0;
+}
+
 static int kvmppc_xive_native_set_attr(struct kvm_device *dev,
 				       struct kvm_device_attr *attr)
 {
+	struct kvmppc_xive *xive = dev->private;
+
+	switch (attr->group) {
+	case KVM_DEV_XIVE_GRP_SOURCES:
+		return kvmppc_xive_native_set_source(xive, attr->attr,
+						     attr->addr);
+	}
 	return -ENXIO;
 }
 
@@ -172,6 +269,13 @@ static int kvmppc_xive_native_get_attr(struct kvm_device *dev,
 static int kvmppc_xive_native_has_attr(struct kvm_device *dev,
 				       struct kvm_device_attr *attr)
 {
+	switch (attr->group) {
+	case KVM_DEV_XIVE_GRP_SOURCES:
+		if (attr->attr >= KVMPPC_XIVE_FIRST_IRQ &&
+		    attr->attr < KVMPPC_XIVE_NR_IRQS)
+			return 0;
+		break;
+	}
 	return -ENXIO;
 }
 
