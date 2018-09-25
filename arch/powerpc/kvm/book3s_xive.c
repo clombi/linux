@@ -756,6 +756,9 @@ u64 kvmppc_xive_get_icp(struct kvm_vcpu *vcpu)
 {
 	struct kvmppc_xive_vcpu *xc = vcpu->arch.xive_vcpu;
 
+	if (!kvmppc_xics_enabled(vcpu))
+		return -EPERM;
+
 	if (!xc)
 		return 0;
 
@@ -771,6 +774,9 @@ int kvmppc_xive_set_icp(struct kvm_vcpu *vcpu, u64 icpval)
 	struct kvmppc_xive *xive = vcpu->kvm->arch.xive;
 	u8 cppr, mfrr;
 	u32 xisr;
+
+	if (!kvmppc_xics_enabled(vcpu))
+		return -EPERM;
 
 	if (!xc || !xive)
 		return -ENOENT;
