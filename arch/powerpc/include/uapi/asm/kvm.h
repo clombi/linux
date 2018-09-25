@@ -676,6 +676,8 @@ struct kvm_ppc_cpu_char {
 
 /* POWER9 XIVE Native Interrupt Controller */
 #define KVM_DEV_XIVE_GRP_SOURCES	1	/* 64-bit source attributes */
+#define KVM_DEV_XIVE_GRP_CTRL		2
+#define   KVM_DEV_XIVE_GET_ESB_FD	1
 
 /* Layout of 64-bit XIVE source attribute values */
 #define  KVM_XIVE_LEVEL_SENSITIVE	(1ULL << 0)
