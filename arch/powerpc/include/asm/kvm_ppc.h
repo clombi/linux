@@ -271,6 +271,8 @@ union kvmppc_one_reg {
 		u64	addr;
 		u64	length;
 	}	vpaval;
+	u32	xive_eqval[8];
+	u64	xive_timaval[4];
 };
 
 struct kvmppc_ops {
@@ -597,6 +599,10 @@ extern int kvmppc_xive_native_cleanup_vcpu(struct kvm_vcpu *vcpu);
 extern void kvmppc_xive_native_init_module(void);
 extern void kvmppc_xive_native_exit_module(void);
 extern int kvmppc_xive_hcall(struct kvm_vcpu *vcpu, u32 cmd);
+extern int kvmppc_xive_get_vp(struct kvm_vcpu *vcpu, union kvmppc_one_reg *val);
+extern int kvmppc_xive_set_vp(struct kvm_vcpu *vcpu, union kvmppc_one_reg *val);
+extern int kvmppc_xive_get_vp_queue(struct kvm_vcpu *vcpu, int priority, union kvmppc_one_reg *val);
+extern int kvmppc_xive_set_vp_queue(struct kvm_vcpu *vcpu, int priority, union kvmppc_one_reg *val);
 
 #else
 static inline int kvmppc_xive_set_xive(struct kvm *kvm, u32 irq, u32 server,
@@ -630,6 +636,10 @@ static inline void kvmppc_xive_native_init_module(void) { }
 static inline void kvmppc_xive_native_exit_module(void) { }
 static inline int kvmppc_xive_hcall(struct kvm_vcpu *vcpu, u32 cmd)
 	{ return 0; }
+static inline int kvmppc_xive_get_vp(struct kvm_vcpu *vcpu, union kvmppc_one_reg *val) { return 0; }
+static inline int kvmppc_xive_set_vp(struct kvm_vcpu *vcpu, union kvmppc_one_reg *val) { return -ENOENT; }
+static inline int kvmppc_xive_get_vp_queue(struct kvm_vcpu *vcpu, int priority, union kvmppc_one_reg *val) { return 0; }
+static inline int kvmppc_xive_set_vp_queue(struct kvm_vcpu *vcpu, int priority, union kvmppc_one_reg *val) { return -ENOENT; }
 
 #endif /* CONFIG_KVM_XIVE */
 

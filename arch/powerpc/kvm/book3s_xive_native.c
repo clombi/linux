@@ -189,6 +189,242 @@ static int xive_native_validate_queue_size(u32 qsize)
 	}
 }
 
+int kvmppc_xive_get_vp(struct kvm_vcpu *vcpu, union kvmppc_one_reg *val)
+{
+	struct kvmppc_xive_vcpu *xc = vcpu->arch.xive_vcpu;
+	u32 version;
+	int rc;
+
+	if (!kvmppc_xive_enabled(vcpu))
+		return -EPERM;
+
+	if (!xc)
+		return -ENOENT;
+
+	val->xive_timaval[0] = vcpu->arch.xive_saved_state.w01;
+
+	rc = xive_native_get_vp_state(xc->vp_id, &version, &val->xive_timaval[1]);
+	if (rc)
+		return rc;
+
+	/* For QEMU monitor */
+	val->xive_timaval[2] = vcpu->arch.xive_cam_word;
+
+	if (XIVE_STATE_COMPAT(version) > 1) {
+		pr_err("invalid OPAL state version %08x\n", version);
+		return -EIO;
+	}
+
+	pr_devel("%s NSR=%02x CPPR=%02x IBP=%02x PIPR=%02x w01=%016llx w2=%08x opal=%016llx\n",
+		 __func__,
+		 vcpu->arch.xive_saved_state.nsr,
+		 vcpu->arch.xive_saved_state.cppr,
+		 vcpu->arch.xive_saved_state.ipb,
+		 vcpu->arch.xive_saved_state.pipr,
+		 vcpu->arch.xive_saved_state.w01,
+		 (u32) vcpu->arch.xive_cam_word, val->xive_timaval[1]);
+
+	return 0;
+}
+
+int kvmppc_xive_set_vp(struct kvm_vcpu *vcpu, union kvmppc_one_reg *val)
+{
+	struct kvmppc_xive_vcpu *xc = vcpu->arch.xive_vcpu;
+	struct kvmppc_xive *xive = vcpu->kvm->arch.xive;
+	u32 version = XIVE_STATE_VERSION;
+	int rc;
+
+	pr_devel("%s w01=%016llx vp=%016llx\n", __func__, val->xive_timaval[0],
+		 val->xive_timaval[1]);
+
+	if (!kvmppc_xive_enabled(vcpu))
+		return -EPERM;
+
+	if (!xc || !xive)
+		return -ENOENT;
+
+	/* We can't update the state of a "pushed" VCPU	 */
+	if (WARN_ON(vcpu->arch.xive_pushed))
+		return -EIO;
+
+	/* TODO: only restore IPB and CPPR ? */
+	vcpu->arch.xive_saved_state.w01 = val->xive_timaval[0];
+
+	rc = xive_native_set_vp_state(xc->vp_id, version, val->xive_timaval[1]);
+	if (rc)
+		return rc;
+
+	return 0;
+}
+
+int kvmppc_xive_get_vp_queue(struct kvm_vcpu *vcpu, int priority,
+			     union kvmppc_one_reg *val)
+{
+	struct kvmppc_xive_vcpu *xc = vcpu->arch.xive_vcpu;
+	struct xive_q *q;
+	u64 qpage;
+	u64 qsize;
+	u64 qeoi_page;
+	u32 escalate_irq;
+	u64 qflags;
+	u32 version;
+	u64 qw1;
+	int rc;
+
+	pr_debug("%s vcpu %d priority %d\n", __func__, xc->server_num,
+		 priority);
+
+	if (!kvmppc_xive_enabled(vcpu))
+		return -EPERM;
+
+	if (!xc)
+		return -ENOENT;
+
+	if (priority != xive_prio_from_guest(priority) || priority == MASKED) {
+		pr_err("Trying to retrieve info from queue %d for VCPU %d\n",
+		       priority, xc->server_num);
+		return -EINVAL;
+	}
+	q = &xc->queues[priority];
+
+	memset(val->xive_eqval, 0, sizeof(val->xive_eqval));
+
+	if (!q->qpage)
+		return 0;
+
+	rc = xive_native_get_queue_info(xc->vp_id, priority, &qpage, &qsize,
+					&qeoi_page, &escalate_irq, &qflags);
+	if (rc)
+		return rc;
+
+	rc = xive_native_get_queue_state(xc->vp_id, priority, &version, &qw1);
+	if (rc)
+		return rc;
+
+	if (XIVE_STATE_COMPAT(version) > 1) {
+		pr_err("invalid OPAL state version %08x\n", version);
+		return -EIO;
+	}
+
+	val->xive_eqval[0] = 0;
+	if (qflags & OPAL_XIVE_EQ_ENABLED)
+		val->xive_eqval[0] |= EQ_W0_VALID|EQ_W0_ENQUEUE;
+	if (qflags & OPAL_XIVE_EQ_ALWAYS_NOTIFY)
+		val->xive_eqval[0] |= EQ_W0_UCOND_NOTIFY;
+	if (qflags & OPAL_XIVE_EQ_ESCALATE)
+		val->xive_eqval[0] |= EQ_W0_ESCALATE_CTL;
+	val->xive_eqval[0] |= SETFIELD(EQ_W0_QSIZE, 0ul, qsize - 12);
+
+	val->xive_eqval[1] = qw1 & 0xffffffff;
+	val->xive_eqval[2] = (q->guest_qpage >> 32) & 0x0fffffff;
+	val->xive_eqval[3] = q->guest_qpage & 0xffffffff;
+	val->xive_eqval[4] = 0;
+	val->xive_eqval[5] = 0;
+	val->xive_eqval[6] = SETFIELD(EQ_W6_NVT_BLOCK, 0ul, 0ul) |
+		SETFIELD(EQ_W6_NVT_INDEX, 0ul, xc->server_num);
+	val->xive_eqval[7] = SETFIELD(EQ_W7_F0_PRIORITY, 0ul, priority);
+
+	/* Mark EQ page dirty for migration */
+	mark_page_dirty(vcpu->kvm, gpa_to_gfn(q->guest_qpage));
+
+	return 0;
+}
+
+int kvmppc_xive_set_vp_queue(struct kvm_vcpu *vcpu, int priority,
+			     union kvmppc_one_reg *val)
+{
+	struct kvm *kvm = vcpu->kvm;
+	struct kvmppc_xive_vcpu *xc = vcpu->arch.xive_vcpu;
+	struct kvmppc_xive *xive = vcpu->kvm->arch.xive;
+	u32 qsize;
+	u64 qpage;
+	u32 server;
+	u8 prio;
+	int rc;
+	__be32 *qaddr = 0;
+	struct page *page;
+	struct xive_q *q;
+	u32 version = XIVE_STATE_VERSION;
+
+	pr_devel("%s VCPU %d priority %d\n", __func__, xc->server_num,
+		 priority);
+
+	if (!xc || !xive)
+		return -ENOENT;
+
+	/*
+	 * Check that we are not trying to configure queues reserved
+	 * for the hypervisor
+	 */
+	if (priority != xive_prio_from_guest(priority) || priority == MASKED) {
+		pr_err("Trying to restore invalid queue %d for VCPU %d\n",
+		       priority, xc->server_num);
+		return -EINVAL;
+	}
+
+	qsize = GETFIELD(EQ_W0_QSIZE, val->xive_eqval[0]) + 12;
+	qpage = (((u64)(val->xive_eqval[2] & 0x0fffffff)) << 32) | val->xive_eqval[3];
+	server = GETFIELD(EQ_W6_NVT_INDEX, val->xive_eqval[6]);
+	prio = GETFIELD(EQ_W7_F0_PRIORITY, val->xive_eqval[7]);
+
+	/*
+	 * TODO: should we support restoring another VCPU EQs ?
+	 * probably not. we should move the service at the KVM XIVE
+	 * device level
+	 */
+	if (xc->server_num != server) {
+		vcpu = kvmppc_xive_find_server(kvm, server);
+		if (!vcpu) {
+			pr_debug("Can't find server %d\n", server);
+			return -EINVAL;
+		}
+		xc = vcpu->arch.xive_vcpu;
+	}
+
+	/* Sanity check */
+	if (priority != prio) {
+		pr_err("invalid state for queue %d for VCPU %d\n",
+		       priority, xc->server_num);
+		return -EIO;
+	}
+	q = &xc->queues[priority];
+
+	rc = xive_native_validate_queue_size(qsize);
+	if (rc || !qsize) {
+		pr_err("invalid queue size %d\n", qsize);
+		return rc;
+	}
+
+	page = gfn_to_page(kvm, gpa_to_gfn(qpage));
+	if (is_error_page(page)) {
+		pr_debug("Couldn't get guest page for %llx!\n", qpage);
+		return -ENOMEM;
+	}
+	qaddr = page_to_virt(page) + (qpage & ~PAGE_MASK);
+	q->guest_qpage = qpage;
+
+	rc = xive_native_configure_queue(xc->vp_id, q, priority,
+					 (__be32 *) qaddr, qsize, true);
+	if (rc) {
+		pr_err("Failed to configure queue %d for VCPU %d: %d\n",
+		       priority, xc->server_num, rc);
+		put_page(page);
+		return rc;
+	}
+
+	rc = xive_native_set_queue_state(xc->vp_id, priority, version,
+					 val->xive_eqval[1]);
+	if (rc)
+		goto error;
+
+	rc = kvmppc_xive_attach_escalation(vcpu, priority);
+error:
+	if (rc)
+		xive_native_cleanup_queue(vcpu, priority);
+	return rc;
+}
+
+
 static int kvmppc_xive_native_set_source(struct kvmppc_xive *xive, long irq,
 					 u64 addr)
 {
@@ -332,6 +568,122 @@ unlock:
 	return rc;
 }
 
+static int kvmppc_xive_native_set_ive(struct kvmppc_xive *xive, long irq,
+				      u64 addr)
+{
+	struct kvmppc_xive_src_block *sb;
+	struct kvmppc_xive_irq_state *state;
+	u64 __user *ubufp = (u64 __user *) addr;
+	u16 src;
+	u64 ive;
+	u32 eq_idx;
+	u32 server;
+	u8 priority;
+	u32 eisn;
+
+	pr_devel("%s irq=0x%lx\n", __func__, irq);
+
+	sb = kvmppc_xive_find_source(xive, irq, &src);
+	if (!sb)
+		return -ENOENT;
+
+	state = &sb->irq_state[src];
+
+	if (!state->valid)
+		return -ENOENT;
+
+	if (get_user(ive, ubufp)) {
+		pr_err("fault getting user info !\n");
+		return -EFAULT;
+	}
+
+	if (!(ive & IVE_VALID) || ive & IVE_MASKED) {
+		pr_err("invalid IVE %016llx for IRQ %lx\n", ive, irq);
+		return -EPERM;
+	}
+
+	/* QEMU encoding of EQ index */
+	eq_idx = GETFIELD(IVE_EQ_INDEX, ive);
+	server = eq_idx >> 3;
+	priority = eq_idx & 0x7;
+
+	eisn = GETFIELD(IVE_EQ_DATA, ive);
+
+	return kvmppc_xive_native_set_source_config(xive, sb, state, server,
+						    priority, eisn);
+}
+
+static int kvmppc_xive_native_get_ive(struct kvmppc_xive *xive, long irq,
+				      u64 addr)
+{
+	struct kvmppc_xive_src_block *sb;
+	struct kvmppc_xive_irq_state *state;
+	u64 __user *ubufp = (u64 __user *) addr;
+	u16 src;
+	u64 ive;
+	u32 eq_idx;
+
+	pr_devel("%s irq=0x%lx\n", __func__, irq);
+
+	sb = kvmppc_xive_find_source(xive, irq, &src);
+	if (!sb)
+		return -ENOENT;
+
+	state = &sb->irq_state[src];
+
+	if (!state->valid)
+		return -ENOENT;
+
+	ive = IVE_VALID;
+
+	arch_spin_lock(&sb->lock);
+
+	if (state->act_priority == MASKED)
+		ive |= IVE_MASKED;
+	else {
+		/* QEMU encoding of EQ index */
+		eq_idx = ((state->act_server) << 3) |
+			((state->act_priority) & 0x7);
+		ive |= SETFIELD(IVE_EQ_BLOCK, 0ul, 0ul) |
+			SETFIELD(IVE_EQ_INDEX, 0ul, eq_idx) |
+			SETFIELD(IVE_EQ_DATA, 0ul, state->eisn);
+	}
+	arch_spin_unlock(&sb->lock);
+
+	if (put_user(ive, ubufp))
+		return -EFAULT;
+
+	return 0;
+}
+
+static int kvmppc_xive_native_sync(struct kvmppc_xive *xive, long irq, u64 addr)
+{
+	struct kvmppc_xive_src_block *sb;
+	struct kvmppc_xive_irq_state *state;
+	struct xive_irq_data *xd;
+	u32 hw_num;
+	u16 src;
+
+	pr_devel("%s irq=0x%lx\n", __func__, irq);
+
+	sb = kvmppc_xive_find_source(xive, irq, &src);
+	if (!sb)
+		return -ENOENT;
+
+	state = &sb->irq_state[src];
+
+	if (!state->valid)
+		return -ENOENT;
+
+	arch_spin_lock(&sb->lock);
+
+	kvmppc_xive_select_irq(state, &hw_num, &xd);
+	xive_native_sync_source(hw_num);
+
+	arch_spin_unlock(&sb->lock);
+	return 0;
+}
+
 static int xive_native_esb_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
@@ -472,6 +824,10 @@ static int kvmppc_xive_native_set_attr(struct kvm_device *dev,
 	case KVM_DEV_XIVE_GRP_SOURCES:
 		return kvmppc_xive_native_set_source(xive, attr->attr,
 						     attr->addr);
+	case KVM_DEV_XIVE_GRP_IVE:
+		return kvmppc_xive_native_set_ive(xive, attr->attr, attr->addr);
+	case KVM_DEV_XIVE_GRP_SYNC:
+		return kvmppc_xive_native_sync(xive, attr->attr, attr->addr);
 	case KVM_DEV_XIVE_GRP_CTRL:
 		switch (attr->attr) {
 		case KVM_DEV_XIVE_VC_BASE:
@@ -488,6 +844,8 @@ static int kvmppc_xive_native_get_attr(struct kvm_device *dev,
 	struct kvmppc_xive *xive = dev->private;
 
 	switch (attr->group) {
+	case KVM_DEV_XIVE_GRP_IVE:
+		return kvmppc_xive_native_get_ive(xive, attr->attr, attr->addr);
 	case KVM_DEV_XIVE_GRP_CTRL:
 		switch (attr->attr) {
 		case KVM_DEV_XIVE_GET_ESB_FD:
@@ -507,6 +865,8 @@ static int kvmppc_xive_native_has_attr(struct kvm_device *dev,
 {
 	switch (attr->group) {
 	case KVM_DEV_XIVE_GRP_SOURCES:
+	case KVM_DEV_XIVE_GRP_IVE:
+	case KVM_DEV_XIVE_GRP_SYNC:
 		if (attr->attr >= KVMPPC_XIVE_FIRST_IRQ &&
 		    attr->attr < KVMPPC_XIVE_NR_IRQS)
 			return 0;
