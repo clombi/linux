@@ -138,6 +138,25 @@ extern int xive_native_disable_vp(u32 vp_id);
 extern int xive_native_get_vp_info(u32 vp_id, u32 *out_cam_id, u32 *out_chip_id);
 extern bool xive_native_has_single_escalation(void);
 
+extern int xive_native_get_queue_info(u32 vp_id, uint32_t prio,
+				      u64 *out_qpage,
+				      u64 *out_qsize,
+				      u64 *out_qeoi_page,
+				      u32 *out_escalate_irq,
+				      u64 *out_qflags);
+
+/* Version is 1, backward compatible to 1 */
+#define XIVE_STATE_VERSION	0x00010001
+#define XIVE_STATE_COMPAT(v)	((v) & 0xffff)
+
+extern int xive_native_get_queue_state(u32 vp_id, uint32_t prio, u32 *out_version,
+				       u64 *out_state);
+extern int xive_native_set_queue_state(u32 vp_id, uint32_t prio, u32 version,
+				       u64 state);
+extern int xive_native_get_vp_state(u32 vp_id, u32 *out_version,
+				    u64 *out_state);
+extern int xive_native_set_vp_state(u32 vp_id, u32 version, u64 state);
+
 #else
 
 static inline bool xive_enabled(void) { return false; }
