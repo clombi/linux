@@ -324,6 +324,60 @@ static int kvmppc_xive_native_get_esb_fd(struct kvmppc_xive *xive, u64 addr)
 	return put_user(ret, ubufp);
 }
 
+static int xive_native_tima_fault(struct vm_fault *vmf)
+{
+	struct vm_area_struct *vma = vmf->vma;
+
+	switch (vmf->pgoff) {
+	case 0: /* HW - forbid access */
+	case 1: /* HV - forbid access */
+		return VM_FAULT_SIGBUS;
+	case 2: /* OS */
+		vm_insert_pfn(vma, vmf->address, xive_tima_os >> PAGE_SHIFT);
+		return VM_FAULT_NOPAGE;
+	case 3: /* USER - TODO */
+	default:
+		return VM_FAULT_SIGBUS;
+	}
+}
+
+static const struct vm_operations_struct xive_native_tima_vmops = {
+	.fault = xive_native_tima_fault,
+};
+
+static int xive_native_tima_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	/*
+	 * The TIMA is four pages wide but only the last two pages (OS
+	 * and User view) are accessible to the guest. The page fault
+	 * handler will handle the permissions.
+	 */
+	if (vma_pages(vma) + vma->vm_pgoff > 4)
+		return -EINVAL;
+
+	vma->vm_flags |= VM_IO | VM_PFNMAP;
+	vma->vm_page_prot = pgprot_noncached_wc(vma->vm_page_prot);
+	vma->vm_ops = &xive_native_tima_vmops;
+	return 0;
+}
+
+static const struct file_operations xive_native_tima_fops = {
+	.mmap = xive_native_tima_mmap,
+};
+
+static int kvmppc_xive_native_get_tima_fd(struct kvmppc_xive *xive, u64 addr)
+{
+	u64 __user *ubufp = (u64 __user *) addr;
+	int ret;
+
+	ret = anon_inode_getfd("[xive-tima]", &xive_native_tima_fops, xive,
+			       O_RDWR | O_CLOEXEC);
+	if (ret < 0)
+		return ret;
+
+	return put_user(ret, ubufp);
+}
+
 static int kvmppc_xive_native_set_attr(struct kvm_device *dev,
 				       struct kvm_device_attr *attr)
 {
@@ -347,6 +401,8 @@ static int kvmppc_xive_native_get_attr(struct kvm_device *dev,
 		switch (attr->attr) {
 		case KVM_DEV_XIVE_GET_ESB_FD:
 			return kvmppc_xive_native_get_esb_fd(xive, attr->addr);
+		case KVM_DEV_XIVE_GET_TIMA_FD:
+			return kvmppc_xive_native_get_tima_fd(xive, attr->addr);
 		}
 		break;
 	}
@@ -365,6 +421,7 @@ static int kvmppc_xive_native_has_attr(struct kvm_device *dev,
 	case KVM_DEV_XIVE_GRP_CTRL:
 		switch (attr->attr) {
 		case KVM_DEV_XIVE_GET_ESB_FD:
+		case KVM_DEV_XIVE_GET_TIMA_FD:
 			return 0;
 		}
 		break;
