@@ -248,5 +248,16 @@ extern int (*__xive_vm_h_ipi)(struct kvm_vcpu *vcpu, unsigned long server,
 extern int (*__xive_vm_h_cppr)(struct kvm_vcpu *vcpu, unsigned long cppr);
 extern int (*__xive_vm_h_eoi)(struct kvm_vcpu *vcpu, unsigned long xirr);
 
+/*
+ * Common Xive routines for XICS-over-XIVE and XIVE native
+ */
+struct kvmppc_xive_src_block *kvmppc_xive_create_src_block(
+	struct kvmppc_xive *xive, int irq);
+void kvmppc_xive_free_sources(struct kvmppc_xive_src_block *sb);
+int kvmppc_xive_select_target(struct kvm *kvm, u32 *server, u8 prio);
+void kvmppc_xive_disable_vcpu_interrupts(struct kvm_vcpu *vcpu);
+int kvmppc_xive_attach_escalation(struct kvm_vcpu *vcpu, u8 prio);
+int kvmppc_xive_debug_show_queues(struct seq_file *m, struct kvm_vcpu *vcpu);
+
 #endif /* CONFIG_KVM_XICS */
 #endif /* _KVM_PPC_BOOK3S_XICS_H */
