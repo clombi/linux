@@ -93,6 +93,29 @@ extern void xive_flush_interrupt(void);
 /* xmon hook */
 extern void xmon_xive_do_dump(int cpu);
 
+/*
+ * Hcall flags shared by the sPAPR backend and KVM
+ */
+
+/* H_INT_GET_SOURCE_INFO */
+#define XIVE_SPAPR_SRC_H_INT_ESB	PPC_BIT(60)
+#define XIVE_SPAPR_SRC_LSI		PPC_BIT(61)
+#define XIVE_SPAPR_SRC_TRIGGER		PPC_BIT(62)
+#define XIVE_SPAPR_SRC_STORE_EOI	PPC_BIT(63)
+
+/* H_INT_SET_SOURCE_CONFIG */
+#define XIVE_SPAPR_SRC_SET_EISN		PPC_BIT(62)
+#define XIVE_SPAPR_SRC_MASK		PPC_BIT(63) /* unused */
+
+/* H_INT_SET_QUEUE_CONFIG */
+#define XIVE_SPAPR_EQ_ALWAYS_NOTIFY	PPC_BIT(63)
+
+/* H_INT_SET_QUEUE_CONFIG */
+#define XIVE_SPAPR_EQ_DEBUG		PPC_BIT(63)
+
+/* H_INT_ESB */
+#define XIVE_SPAPR_ESB_STORE		PPC_BIT(63)
+
 /* APIs used by KVM */
 extern u32 xive_native_default_eq_shift(void);
 extern u32 xive_native_alloc_vp_block(u32 max_vcpus);

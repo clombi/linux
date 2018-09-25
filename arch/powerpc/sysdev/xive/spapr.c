@@ -184,9 +184,6 @@ static long plpar_int_get_source_info(unsigned long flags,
 	return 0;
 }
 
-#define XIVE_SRC_SET_EISN (1ull << (63 - 62))
-#define XIVE_SRC_MASK     (1ull << (63 - 63)) /* unused */
-
 static long plpar_int_set_source_config(unsigned long flags,
 					unsigned long lisn,
 					unsigned long target,
@@ -243,8 +240,6 @@ static long plpar_int_get_queue_info(unsigned long flags,
 	return 0;
 }
 
-#define XIVE_EQ_ALWAYS_NOTIFY (1ull << (63 - 63))
-
 static long plpar_int_set_queue_config(unsigned long flags,
 				       unsigned long target,
 				       unsigned long priority,
@@ -286,8 +281,6 @@ static long plpar_int_sync(unsigned long flags, unsigned long lisn)
 	return 0;
 }
 
-#define XIVE_ESB_FLAG_STORE (1ull << (63 - 63))
-
 static long plpar_int_esb(unsigned long flags,
 			  unsigned long lisn,
 			  unsigned long offset,
@@ -321,18 +314,13 @@ static u64 xive_spapr_esb_rw(u32 lisn, u32 offset, u64 data, bool write)
 	unsigned long read_data;
 	long rc;
 
-	rc = plpar_int_esb(write ? XIVE_ESB_FLAG_STORE : 0,
+	rc = plpar_int_esb(write ? XIVE_SPAPR_ESB_STORE : 0,
 			   lisn, offset, data, &read_data);
 	if (rc)
 		return -1;
 
 	return write ? 0 : read_data;
 }
-
-#define XIVE_SRC_H_INT_ESB     (1ull << (63 - 60))
-#define XIVE_SRC_LSI           (1ull << (63 - 61))
-#define XIVE_SRC_TRIGGER       (1ull << (63 - 62))
-#define XIVE_SRC_STORE_EOI     (1ull << (63 - 63))
 
 static int xive_spapr_populate_irq_data(u32 hw_irq, struct xive_irq_data *data)
 {
@@ -349,11 +337,11 @@ static int xive_spapr_populate_irq_data(u32 hw_irq, struct xive_irq_data *data)
 	if (rc)
 		return  -EINVAL;
 
-	if (flags & XIVE_SRC_H_INT_ESB)
+	if (flags & XIVE_SPAPR_SRC_H_INT_ESB)
 		data->flags  |= XIVE_IRQ_FLAG_H_INT_ESB;
-	if (flags & XIVE_SRC_STORE_EOI)
+	if (flags & XIVE_SPAPR_SRC_STORE_EOI)
 		data->flags  |= XIVE_IRQ_FLAG_STORE_EOI;
-	if (flags & XIVE_SRC_LSI)
+	if (flags & XIVE_SPAPR_SRC_LSI)
 		data->flags  |= XIVE_IRQ_FLAG_LSI;
 	data->eoi_page  = eoi_page;
 	data->esb_shift = esb_shift;
@@ -374,7 +362,7 @@ static int xive_spapr_populate_irq_data(u32 hw_irq, struct xive_irq_data *data)
 	data->hw_irq = hw_irq;
 
 	/* Full function page supports trigger */
-	if (flags & XIVE_SRC_TRIGGER) {
+	if (flags & XIVE_SPAPR_SRC_TRIGGER) {
 		data->trig_mmio = data->eoi_mmio;
 		return 0;
 	}
@@ -391,8 +379,8 @@ static int xive_spapr_configure_irq(u32 hw_irq, u32 target, u8 prio, u32 sw_irq)
 {
 	long rc;
 
-	rc = plpar_int_set_source_config(XIVE_SRC_SET_EISN, hw_irq, target,
-					 prio, sw_irq);
+	rc = plpar_int_set_source_config(XIVE_SPAPR_SRC_SET_EISN, hw_irq,
+					 target, prio, sw_irq);
 
 	return rc == 0 ? 0 : -ENXIO;
 }
@@ -432,7 +420,7 @@ static int xive_spapr_configure_queue(u32 target, struct xive_q *q, u8 prio,
 	q->eoi_phys = esn_page;
 
 	/* Default is to always notify */
-	flags = XIVE_EQ_ALWAYS_NOTIFY;
+	flags = XIVE_SPAPR_EQ_ALWAYS_NOTIFY;
 
 	/* Configure and enable the queue in HW */
 	rc = plpar_int_set_queue_config(flags, target, prio, qpage_phys, order);
