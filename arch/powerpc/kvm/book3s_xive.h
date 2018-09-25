@@ -268,5 +268,59 @@ void kvmppc_xive_disable_vcpu_interrupts(struct kvm_vcpu *vcpu);
 int kvmppc_xive_attach_escalation(struct kvm_vcpu *vcpu, u8 prio);
 int kvmppc_xive_debug_show_queues(struct seq_file *m, struct kvm_vcpu *vcpu);
 
+int xive_rm_h_int_get_source_info(struct kvm_vcpu *vcpu,
+				    unsigned long flag,
+				    unsigned long lisn);
+int xive_rm_h_int_get_source_config(struct kvm_vcpu *vcpu,
+				      unsigned long flag,
+				      unsigned long lisn);
+int xive_rm_h_int_get_queue_info(struct kvm_vcpu *vcpu,
+				   unsigned long flag,
+				   unsigned long target,
+				   unsigned long priority);
+int xive_rm_h_int_get_queue_config(struct kvm_vcpu *vcpu,
+				     unsigned long flag,
+				     unsigned long target,
+				     unsigned long priority);
+int xive_rm_h_int_set_os_reporting_line(struct kvm_vcpu *vcpu,
+					  unsigned long flag,
+					  unsigned long reportingline);
+int xive_rm_h_int_get_os_reporting_line(struct kvm_vcpu *vcpu,
+					  unsigned long flag,
+					  unsigned long target,
+					  unsigned long reportingline);
+int xive_rm_h_int_esb(struct kvm_vcpu *vcpu, unsigned long flag,
+			unsigned long lisn, unsigned long offset,
+			unsigned long data);
+int xive_rm_h_int_sync(struct kvm_vcpu *vcpu, unsigned long flag,
+			 unsigned long lisn);
+
+extern int (*__xive_vm_h_int_get_source_info)(struct kvm_vcpu *vcpu,
+				    unsigned long flag,
+				    unsigned long lisn);
+extern int (*__xive_vm_h_int_get_source_config)(struct kvm_vcpu *vcpu,
+				      unsigned long flag,
+				      unsigned long lisn);
+extern int (*__xive_vm_h_int_get_queue_info)(struct kvm_vcpu *vcpu,
+				   unsigned long flag,
+				   unsigned long target,
+				   unsigned long priority);
+extern int (*__xive_vm_h_int_get_queue_config)(struct kvm_vcpu *vcpu,
+				     unsigned long flag,
+				     unsigned long target,
+				     unsigned long priority);
+extern int (*__xive_vm_h_int_set_os_reporting_line)(struct kvm_vcpu *vcpu,
+					  unsigned long flag,
+					  unsigned long reportingline);
+extern int (*__xive_vm_h_int_get_os_reporting_line)(struct kvm_vcpu *vcpu,
+					  unsigned long flag,
+					  unsigned long target,
+					  unsigned long reportingline);
+extern int (*__xive_vm_h_int_esb)(struct kvm_vcpu *vcpu, unsigned long flag,
+			unsigned long lisn, unsigned long offset,
+			unsigned long data);
+extern int (*__xive_vm_h_int_sync)(struct kvm_vcpu *vcpu, unsigned long flag,
+			 unsigned long lisn);
+
 #endif /* CONFIG_KVM_XICS */
 #endif /* _KVM_PPC_BOOK3S_XICS_H */

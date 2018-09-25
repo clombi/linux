@@ -82,6 +82,8 @@ kvm-hv-$(CONFIG_PPC_TRANSACTIONAL_MEM) += \
 
 kvm-book3s_64-builtin-xics-objs-$(CONFIG_KVM_XICS) := \
 	book3s_hv_rm_xics.o book3s_hv_rm_xive.o
+kvm-book3s_64-builtin-xics-objs-$(CONFIG_KVM_XIVE) += \
+	book3s_hv_rm_xive_native.o
 
 kvm-book3s_64-builtin-tm-objs-$(CONFIG_PPC_TRANSACTIONAL_MEM) += \
 	book3s_hv_tm_builtin.o

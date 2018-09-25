@@ -596,6 +596,7 @@ extern int kvmppc_xive_native_connect_vcpu(struct kvm_device *dev,
 extern int kvmppc_xive_native_cleanup_vcpu(struct kvm_vcpu *vcpu);
 extern void kvmppc_xive_native_init_module(void);
 extern void kvmppc_xive_native_exit_module(void);
+extern int kvmppc_xive_hcall(struct kvm_vcpu *vcpu, u32 cmd);
 
 #else
 static inline int kvmppc_xive_set_xive(struct kvm *kvm, u32 irq, u32 server,
@@ -627,6 +628,8 @@ static inline int kvmppc_xive_native_connect_vcpu(struct kvm_device *dev,
 static inline int kvmppc_xive_native_cleanup_vcpu(struct kvm_vcpu *vcpu) { return 0; }
 static inline void kvmppc_xive_native_init_module(void) { }
 static inline void kvmppc_xive_native_exit_module(void) { }
+static inline int kvmppc_xive_hcall(struct kvm_vcpu *vcpu, u32 cmd)
+	{ return 0; }
 
 #endif /* CONFIG_KVM_XIVE */
 
@@ -673,6 +676,46 @@ int kvmppc_rm_h_ipi(struct kvm_vcpu *vcpu, unsigned long server,
                     unsigned long mfrr);
 int kvmppc_rm_h_cppr(struct kvm_vcpu *vcpu, unsigned long cppr);
 int kvmppc_rm_h_eoi(struct kvm_vcpu *vcpu, unsigned long xirr);
+
+int kvmppc_rm_h_int_get_source_info(struct kvm_vcpu *vcpu,
+				    unsigned long flag,
+				    unsigned long lisn);
+int kvmppc_rm_h_int_set_source_config(struct kvm_vcpu *vcpu,
+				      unsigned long flag,
+				      unsigned long lisn,
+				      unsigned long target,
+				      unsigned long priority,
+				      unsigned long eisn);
+int kvmppc_rm_h_int_get_source_config(struct kvm_vcpu *vcpu,
+				      unsigned long flag,
+				      unsigned long lisn);
+int kvmppc_rm_h_int_get_queue_info(struct kvm_vcpu *vcpu,
+				   unsigned long flag,
+				   unsigned long target,
+				   unsigned long priority);
+int kvmppc_rm_h_int_set_queue_config(struct kvm_vcpu *vcpu,
+				     unsigned long flag,
+				     unsigned long target,
+				     unsigned long priority,
+				     unsigned long qpage,
+				     unsigned long qsize);
+int kvmppc_rm_h_int_get_queue_config(struct kvm_vcpu *vcpu,
+				     unsigned long flag,
+				     unsigned long target,
+				     unsigned long priority);
+int kvmppc_rm_h_int_set_os_reporting_line(struct kvm_vcpu *vcpu,
+					  unsigned long flag,
+					  unsigned long reportingline);
+int kvmppc_rm_h_int_get_os_reporting_line(struct kvm_vcpu *vcpu,
+					  unsigned long flag,
+					  unsigned long target,
+					  unsigned long reportingline);
+int kvmppc_rm_h_int_esb(struct kvm_vcpu *vcpu, unsigned long flag,
+			unsigned long lisn, unsigned long offset,
+			unsigned long data);
+int kvmppc_rm_h_int_sync(struct kvm_vcpu *vcpu, unsigned long flag,
+			 unsigned long lisn);
+int kvmppc_rm_h_int_reset(struct kvm_vcpu *vcpu, unsigned long flag);
 
 /*
  * Host-side operations we want to set up while running in real

@@ -51,6 +51,42 @@ EXPORT_SYMBOL_GPL(__xive_vm_h_ipi);
 EXPORT_SYMBOL_GPL(__xive_vm_h_cppr);
 EXPORT_SYMBOL_GPL(__xive_vm_h_eoi);
 
+int (*__xive_vm_h_int_get_source_info)(struct kvm_vcpu *vcpu,
+				       unsigned long flag,
+				       unsigned long lisn);
+int (*__xive_vm_h_int_get_source_config)(struct kvm_vcpu *vcpu,
+					 unsigned long flag,
+					 unsigned long lisn);
+int (*__xive_vm_h_int_get_queue_info)(struct kvm_vcpu *vcpu,
+				      unsigned long flag,
+				      unsigned long target,
+				      unsigned long priority);
+int (*__xive_vm_h_int_get_queue_config)(struct kvm_vcpu *vcpu,
+					unsigned long flag,
+					unsigned long target,
+					unsigned long priority);
+int (*__xive_vm_h_int_set_os_reporting_line)(struct kvm_vcpu *vcpu,
+					     unsigned long flag,
+					     unsigned long line);
+int (*__xive_vm_h_int_get_os_reporting_line)(struct kvm_vcpu *vcpu,
+					     unsigned long flag,
+					     unsigned long target,
+					     unsigned long line);
+int (*__xive_vm_h_int_esb)(struct kvm_vcpu *vcpu, unsigned long flag,
+			   unsigned long lisn, unsigned long offset,
+			   unsigned long data);
+int (*__xive_vm_h_int_sync)(struct kvm_vcpu *vcpu, unsigned long flag,
+			    unsigned long lisn);
+
+EXPORT_SYMBOL_GPL(__xive_vm_h_int_get_source_info);
+EXPORT_SYMBOL_GPL(__xive_vm_h_int_get_source_config);
+EXPORT_SYMBOL_GPL(__xive_vm_h_int_get_queue_info);
+EXPORT_SYMBOL_GPL(__xive_vm_h_int_get_queue_config);
+EXPORT_SYMBOL_GPL(__xive_vm_h_int_set_os_reporting_line);
+EXPORT_SYMBOL_GPL(__xive_vm_h_int_get_os_reporting_line);
+EXPORT_SYMBOL_GPL(__xive_vm_h_int_esb);
+EXPORT_SYMBOL_GPL(__xive_vm_h_int_sync);
+
 /*
  * Hash page table alignment on newer cpus(CPU_FTR_ARCH_206)
  * should be power of 2.
@@ -631,6 +667,166 @@ int kvmppc_rm_h_eoi(struct kvm_vcpu *vcpu, unsigned long xirr)
 		return xics_rm_h_eoi(vcpu, xirr);
 }
 #endif /* CONFIG_KVM_XICS */
+
+#ifdef CONFIG_KVM_XIVE
+int kvmppc_rm_h_int_get_source_info(struct kvm_vcpu *vcpu,
+				    unsigned long flag,
+				    unsigned long lisn)
+{
+	if (!kvmppc_xive_enabled(vcpu))
+		return H_TOO_HARD;
+	if (!xive_enabled())
+		return H_TOO_HARD;
+
+	if (is_rm())
+		return xive_rm_h_int_get_source_info(vcpu, flag, lisn);
+	if (unlikely(!__xive_vm_h_int_get_source_info))
+		return H_NOT_AVAILABLE;
+	return __xive_vm_h_int_get_source_info(vcpu, flag, lisn);
+}
+
+int kvmppc_rm_h_int_set_source_config(struct kvm_vcpu *vcpu,
+				      unsigned long flag,
+				      unsigned long lisn,
+				      unsigned long target,
+				      unsigned long priority,
+				      unsigned long eisn)
+{
+	return H_TOO_HARD;
+}
+
+int kvmppc_rm_h_int_get_source_config(struct kvm_vcpu *vcpu,
+				      unsigned long flag,
+				      unsigned long lisn)
+{
+	if (!kvmppc_xive_enabled(vcpu))
+		return H_TOO_HARD;
+	if (!xive_enabled())
+		return H_TOO_HARD;
+
+	if (is_rm())
+		return xive_rm_h_int_get_source_config(vcpu, flag, lisn);
+	if (unlikely(!__xive_vm_h_int_get_source_config))
+		return H_NOT_AVAILABLE;
+	return __xive_vm_h_int_get_source_config(vcpu, flag, lisn);
+}
+
+int kvmppc_rm_h_int_get_queue_info(struct kvm_vcpu *vcpu,
+				   unsigned long flag,
+				   unsigned long target,
+				   unsigned long priority)
+{
+	if (!kvmppc_xive_enabled(vcpu))
+		return H_TOO_HARD;
+	if (!xive_enabled())
+		return H_TOO_HARD;
+
+	if (is_rm())
+		return xive_rm_h_int_get_queue_info(vcpu, flag, target,
+						    priority);
+	if (unlikely(!__xive_vm_h_int_get_queue_info))
+		return H_NOT_AVAILABLE;
+	return __xive_vm_h_int_get_queue_info(vcpu, flag, target, priority);
+}
+
+int kvmppc_rm_h_int_set_queue_config(struct kvm_vcpu *vcpu,
+				     unsigned long flag,
+				     unsigned long target,
+				     unsigned long priority,
+				     unsigned long qpage,
+				     unsigned long qsize)
+{
+	return H_TOO_HARD;
+}
+
+int kvmppc_rm_h_int_get_queue_config(struct kvm_vcpu *vcpu,
+				     unsigned long flag,
+				     unsigned long target,
+				     unsigned long priority)
+{
+	if (!kvmppc_xive_enabled(vcpu))
+		return H_TOO_HARD;
+	if (!xive_enabled())
+		return H_TOO_HARD;
+
+	if (is_rm())
+		return xive_rm_h_int_get_queue_config(vcpu, flag, target,
+						      priority);
+	if (unlikely(!__xive_vm_h_int_get_queue_config))
+		return H_NOT_AVAILABLE;
+	return __xive_vm_h_int_get_queue_config(vcpu, flag, target, priority);
+}
+
+int kvmppc_rm_h_int_set_os_reporting_line(struct kvm_vcpu *vcpu,
+					  unsigned long flag,
+					  unsigned long line)
+{
+	if (!kvmppc_xive_enabled(vcpu))
+		return H_TOO_HARD;
+	if (!xive_enabled())
+		return H_TOO_HARD;
+
+	if (is_rm())
+		return xive_rm_h_int_set_os_reporting_line(vcpu, flag, line);
+	if (unlikely(!__xive_vm_h_int_set_os_reporting_line))
+		return H_NOT_AVAILABLE;
+	return __xive_vm_h_int_set_os_reporting_line(vcpu, flag, line);
+}
+
+int kvmppc_rm_h_int_get_os_reporting_line(struct kvm_vcpu *vcpu,
+					  unsigned long flag,
+					  unsigned long target,
+					  unsigned long line)
+{
+	if (!kvmppc_xive_enabled(vcpu))
+		return H_TOO_HARD;
+	if (!xive_enabled())
+		return H_TOO_HARD;
+
+	if (is_rm())
+		return xive_rm_h_int_get_os_reporting_line(vcpu,
+							   flag, target, line);
+	if (unlikely(!__xive_vm_h_int_get_os_reporting_line))
+		return H_NOT_AVAILABLE;
+	return __xive_vm_h_int_get_os_reporting_line(vcpu, flag, target, line);
+}
+
+int kvmppc_rm_h_int_esb(struct kvm_vcpu *vcpu, unsigned long flag,
+			 unsigned long lisn, unsigned long offset,
+			 unsigned long data)
+{
+	if (!kvmppc_xive_enabled(vcpu))
+		return H_TOO_HARD;
+	if (!xive_enabled())
+		return H_TOO_HARD;
+
+	if (is_rm())
+		return xive_rm_h_int_esb(vcpu, flag, lisn, offset, data);
+	if (unlikely(!__xive_vm_h_int_esb))
+		return H_NOT_AVAILABLE;
+	return __xive_vm_h_int_esb(vcpu, flag, lisn, offset, data);
+}
+
+int kvmppc_rm_h_int_sync(struct kvm_vcpu *vcpu, unsigned long flag,
+			 unsigned long lisn)
+{
+	if (!kvmppc_xive_enabled(vcpu))
+		return H_TOO_HARD;
+	if (!xive_enabled())
+		return H_TOO_HARD;
+
+	if (is_rm())
+		return xive_rm_h_int_sync(vcpu, flag, lisn);
+	if (unlikely(!__xive_vm_h_int_sync))
+		return H_NOT_AVAILABLE;
+	return __xive_vm_h_int_sync(vcpu, flag, lisn);
+}
+
+int kvmppc_rm_h_int_reset(struct kvm_vcpu *vcpu, unsigned long flag)
+{
+	return H_TOO_HARD;
+}
+#endif /* CONFIG_KVM_XIVE */
 
 void kvmppc_bad_interrupt(struct pt_regs *regs)
 {

@@ -2557,6 +2557,58 @@ hcall_real_table:
 	.long	0		/* 0x2fc - H_XIRR_X*/
 #endif
 	.long	DOTSYM(kvmppc_h_random) - hcall_real_table
+	.long	0		/* 0x304 */
+	.long	0		/* 0x308 */
+	.long	0		/* 0x30c */
+	.long	0		/* 0x310 */
+	.long	0		/* 0x314 */
+	.long	0		/* 0x318 */
+	.long	0		/* 0x31c */
+	.long	0		/* 0x320 */
+	.long	0		/* 0x324 */
+	.long	0		/* 0x328 */
+	.long	0		/* 0x32c */
+	.long	0		/* 0x330 */
+	.long	0		/* 0x334 */
+	.long	0		/* 0x338 */
+	.long	0		/* 0x33c */
+	.long	0		/* 0x340 */
+	.long	0		/* 0x344 */
+	.long	0		/* 0x348 */
+	.long	0		/* 0x34c */
+	.long	0		/* 0x350 */
+	.long	0		/* 0x354 */
+	.long	0		/* 0x358 */
+	.long	0		/* 0x35c */
+	.long	0		/* 0x360 */
+	.long	0		/* 0x364 */
+	.long	0		/* 0x368 */
+	.long	0		/* 0x36c */
+	.long	0		/* 0x370 */
+	.long	0		/* 0x374 */
+	.long	0		/* 0x378 */
+	.long	0		/* 0x37c */
+	.long	0		/* 0x380 */
+	.long	0		/* 0x384 */
+	.long	0		/* 0x388 */
+	.long	0		/* 0x38c */
+	.long	0		/* 0x390 */
+	.long	0		/* 0x394 */
+	.long	0		/* 0x398 */
+	.long	0		/* 0x39c */
+	.long	0		/* 0x3a0 */
+	.long	0		/* 0x3a4 */
+	.long	DOTSYM(kvmppc_rm_h_int_get_source_info) - hcall_real_table
+	.long	DOTSYM(kvmppc_rm_h_int_set_source_config) - hcall_real_table
+	.long	DOTSYM(kvmppc_rm_h_int_get_source_config) - hcall_real_table
+	.long	DOTSYM(kvmppc_rm_h_int_get_queue_info) - hcall_real_table
+	.long	DOTSYM(kvmppc_rm_h_int_set_queue_config) - hcall_real_table
+	.long	DOTSYM(kvmppc_rm_h_int_get_queue_config) - hcall_real_table
+	.long	DOTSYM(kvmppc_rm_h_int_set_os_reporting_line) - hcall_real_table
+	.long	DOTSYM(kvmppc_rm_h_int_get_os_reporting_line) - hcall_real_table
+	.long	DOTSYM(kvmppc_rm_h_int_esb) - hcall_real_table
+	.long	DOTSYM(kvmppc_rm_h_int_sync) - hcall_real_table
+	.long	DOTSYM(kvmppc_rm_h_int_reset) - hcall_real_table
 	.globl	hcall_real_table_end
 hcall_real_table_end:
 

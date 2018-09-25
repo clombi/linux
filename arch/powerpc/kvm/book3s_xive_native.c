@@ -175,6 +175,20 @@ bail:
 	return rc;
 }
 
+static int xive_native_validate_queue_size(u32 qsize)
+{
+	switch (qsize) {
+	case 12:
+	case 16:
+	case 21:
+	case 24:
+	case 0:
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
 static int kvmppc_xive_native_set_source(struct kvmppc_xive *xive, long irq,
 					 u64 addr)
 {
@@ -264,6 +278,58 @@ static int kvmppc_xive_native_get_vc_base(struct kvmppc_xive *xive, u64 addr)
 		return -EFAULT;
 
 	return 0;
+}
+
+static int kvmppc_xive_native_set_source_config(struct kvmppc_xive *xive,
+					struct kvmppc_xive_src_block *sb,
+					struct kvmppc_xive_irq_state *state,
+					u32 server,
+					u8 priority,
+					u32 eisn)
+{
+	struct kvm *kvm = xive->kvm;
+	u32 hw_num;
+	int rc = 0;
+
+	/*
+	 * TODO: This might be too simplistic when compared to
+	 * kvmppc_xive_set_xive(). Should we do something similar to
+	 * safely mask and unmask a source ? or should we just let the
+	 * guest handle the possible races ?
+	 */
+	arch_spin_lock(&sb->lock);
+
+	if (state->act_server == server && state->act_priority == priority &&
+	    state->eisn == eisn)
+		goto unlock;
+
+	pr_devel("new_act_prio=%d new_act_server=%d act_server=%d act_prio=%d\n",
+		 priority, server, state->act_server, state->act_priority);
+
+	kvmppc_xive_select_irq(state, &hw_num, NULL);
+
+	if (priority != MASKED) {
+		rc = kvmppc_xive_select_target(kvm, &server, priority);
+		if (rc)
+			goto unlock;
+
+		state->act_priority = priority;
+		state->act_server = server;
+		state->eisn = eisn;
+
+		rc = xive_native_configure_irq(hw_num, xive->vp_base + server,
+					       priority, eisn);
+	} else {
+		state->act_priority = MASKED;
+		state->act_server = 0;
+		state->eisn = 0;
+
+		rc = xive_native_configure_irq(hw_num, 0, MASKED, 0);
+	}
+
+unlock:
+	arch_spin_unlock(&sb->lock);
+	return rc;
 }
 
 static int xive_native_esb_fault(struct vm_fault *vmf)
@@ -534,6 +600,248 @@ static int kvmppc_xive_native_create(struct kvm_device *dev, u32 type)
 	return ret;
 }
 
+static int kvmppc_h_int_set_source_config(struct kvm_vcpu *vcpu,
+					  unsigned long flags,
+					  unsigned long irq,
+					  unsigned long server,
+					  unsigned long priority,
+					  unsigned long eisn)
+{
+	struct kvmppc_xive *xive = vcpu->kvm->arch.xive;
+	struct kvmppc_xive_src_block *sb;
+	struct kvmppc_xive_irq_state *state;
+	int rc = 0;
+	u16 idx;
+
+	pr_devel("H_INT_SET_SOURCE_CONFIG flags=%08lx irq=%lx server=%ld priority=%ld eisn=%lx\n",
+		 flags, irq, server, priority, eisn);
+
+	if (flags & ~(XIVE_SPAPR_SRC_SET_EISN | XIVE_SPAPR_SRC_MASK))
+		return H_PARAMETER;
+
+	sb = kvmppc_xive_find_source(xive, irq, &idx);
+	if (!sb)
+		return H_P2;
+	state = &sb->irq_state[idx];
+
+	if (!(flags & XIVE_SPAPR_SRC_SET_EISN))
+		eisn = state->eisn;
+
+	if (priority != xive_prio_from_guest(priority)) {
+		pr_err("invalid priority for queue %ld for VCPU %ld\n",
+		       priority, server);
+		return H_P3;
+	}
+
+	rc = kvmppc_xive_native_set_source_config(xive, sb, state, server,
+						  priority, eisn);
+	if (!rc)
+		return H_SUCCESS;
+	else if (rc == -EINVAL)
+		return H_P4; /* no server found */
+	else
+		return H_HARDWARE;
+}
+
+static int kvmppc_h_int_set_queue_config(struct kvm_vcpu *vcpu,
+					 unsigned long flags,
+					 unsigned long server,
+					 unsigned long priority,
+					 unsigned long qpage,
+					 unsigned long qsize)
+{
+	struct kvm *kvm = vcpu->kvm;
+	struct kvmppc_xive_vcpu *xc = vcpu->arch.xive_vcpu;
+	struct xive_q *q;
+	int rc;
+	__be32 *qaddr = 0;
+	struct page *page;
+
+	pr_devel("H_INT_SET_QUEUE_CONFIG flags=%08lx server=%ld priority=%ld qpage=%08lx qsize=%ld\n",
+		 flags, server, priority, qpage, qsize);
+
+	if (flags & ~XIVE_SPAPR_EQ_ALWAYS_NOTIFY)
+		return H_PARAMETER;
+
+	if (xc->server_num != server) {
+		vcpu = kvmppc_xive_find_server(kvm, server);
+		if (!vcpu) {
+			pr_debug("Can't find server %ld\n", server);
+			return H_P2;
+		}
+		xc = vcpu->arch.xive_vcpu;
+	}
+
+	if (priority != xive_prio_from_guest(priority) || priority == MASKED) {
+		pr_err("invalid priority for queue %ld for VCPU %d\n",
+		       priority, xc->server_num);
+		return H_P3;
+	}
+	q = &xc->queues[priority];
+
+	rc = xive_native_validate_queue_size(qsize);
+	if (rc) {
+		pr_err("invalid queue size %ld\n", qsize);
+		return H_P5;
+	}
+
+	/* reset queue and disable queueing */
+	if (!qsize) {
+		rc = xive_native_configure_queue(xc->vp_id, q, priority,
+						 NULL, 0, true);
+		if (rc) {
+			pr_err("Failed to reset queue %ld for VCPU %d: %d\n",
+			       priority, xc->server_num, rc);
+			return H_HARDWARE;
+		}
+
+		if (q->qpage) {
+			put_page(virt_to_page(q->qpage));
+			q->qpage = NULL;
+		}
+
+		return H_SUCCESS;
+	}
+
+	page = gfn_to_page(kvm, gpa_to_gfn(qpage));
+	if (is_error_page(page)) {
+		pr_warn("Couldn't get guest page for %lx!\n", qpage);
+		return H_P4;
+	}
+	qaddr = page_to_virt(page) + (qpage & ~PAGE_MASK);
+
+	rc = xive_native_configure_queue(xc->vp_id, q, priority,
+					 (__be32 *) qaddr, qsize, true);
+	if (rc) {
+		pr_err("Failed to configure queue %ld for VCPU %d: %d\n",
+		       priority, xc->server_num, rc);
+		put_page(page);
+		return H_HARDWARE;
+	}
+
+	rc = kvmppc_xive_attach_escalation(vcpu, priority);
+	if (rc) {
+		xive_native_cleanup_queue(vcpu, priority);
+		return H_HARDWARE;
+	}
+
+	return H_SUCCESS;
+}
+
+static void kvmppc_xive_reset_sources(struct kvmppc_xive_src_block *sb)
+{
+	int i;
+
+	for (i = 0; i < KVMPPC_XICS_IRQ_PER_ICS; i++) {
+		struct kvmppc_xive_irq_state *state = &sb->irq_state[i];
+
+		if (!state->valid)
+			continue;
+
+		if (state->act_priority == MASKED)
+			continue;
+
+		arch_spin_lock(&sb->lock);
+		state->eisn = 0;
+		state->act_server = 0;
+		state->act_priority = MASKED;
+		xive_vm_esb_load(&state->ipi_data, XIVE_ESB_SET_PQ_01);
+		xive_native_configure_irq(state->ipi_number, 0, MASKED, 0);
+		if (state->pt_number) {
+			xive_vm_esb_load(state->pt_data, XIVE_ESB_SET_PQ_01);
+			xive_native_configure_irq(state->pt_number,
+						  0, MASKED, 0);
+		}
+		arch_spin_unlock(&sb->lock);
+	}
+}
+
+static int kvmppc_h_int_reset(struct kvmppc_xive *xive, unsigned long flags)
+{
+	struct kvm *kvm = xive->kvm;
+	struct kvm_vcpu *vcpu;
+	unsigned int i;
+
+	pr_devel("H_INT_RESET flags=%08lx\n", flags);
+
+	if (flags)
+		return H_PARAMETER;
+
+	mutex_lock(&kvm->lock);
+
+	kvm_for_each_vcpu(i, vcpu, kvm) {
+		struct kvmppc_xive_vcpu *xc = vcpu->arch.xive_vcpu;
+		unsigned int i;
+
+		if (!xc)
+			continue;
+
+		/* TODO: Ensure no interrupt is still routed to that VP ? */
+
+		kvmppc_xive_disable_vcpu_interrupts(vcpu);
+
+		for (i = 0; i < KVMPPC_XIVE_Q_COUNT; i++) {
+
+			if (xc->esc_virq[i]) {
+				free_irq(xc->esc_virq[i], vcpu);
+				irq_dispose_mapping(xc->esc_virq[i]);
+				kfree(xc->esc_virq_names[i]);
+				xc->esc_virq[i] = 0;
+			}
+
+			xive_native_cleanup_queue(vcpu, i);
+		}
+	}
+
+	for (i = 0; i <= xive->max_sbid; i++) {
+		if (xive->src_blocks[i])
+			kvmppc_xive_reset_sources(xive->src_blocks[i]);
+	}
+
+	mutex_unlock(&kvm->lock);
+
+	return H_SUCCESS;
+}
+
+int kvmppc_xive_hcall(struct kvm_vcpu *vcpu, u32 req)
+{
+	struct kvmppc_xive *xive = vcpu->kvm->arch.xive;
+	int rc;
+
+	if (!xive || !vcpu->arch.xive_vcpu)
+		return H_FUNCTION;
+
+	switch (req) {
+	case H_INT_SET_QUEUE_CONFIG:
+		rc = kvmppc_h_int_set_queue_config(vcpu,
+						   kvmppc_get_gpr(vcpu, 4),
+						   kvmppc_get_gpr(vcpu, 5),
+						   kvmppc_get_gpr(vcpu, 6),
+						   kvmppc_get_gpr(vcpu, 7),
+						   kvmppc_get_gpr(vcpu, 8));
+		break;
+
+	case H_INT_SET_SOURCE_CONFIG:
+		rc = kvmppc_h_int_set_source_config(vcpu,
+						    kvmppc_get_gpr(vcpu, 4),
+						    kvmppc_get_gpr(vcpu, 5),
+						    kvmppc_get_gpr(vcpu, 6),
+						    kvmppc_get_gpr(vcpu, 7),
+						    kvmppc_get_gpr(vcpu, 8));
+		break;
+
+	case H_INT_RESET:
+		rc = kvmppc_h_int_reset(xive, kvmppc_get_gpr(vcpu, 4));
+		break;
+
+	default:
+		rc =  H_NOT_AVAILABLE;
+	}
+
+	return rc;
+}
+EXPORT_SYMBOL_GPL(kvmppc_xive_hcall);
+
 static int xive_native_debug_show(struct seq_file *m, void *private)
 {
 	struct kvmppc_xive *xive = m->private;
@@ -618,10 +926,26 @@ struct kvm_device_ops kvm_xive_native_ops = {
 
 void kvmppc_xive_native_init_module(void)
 {
-	;
+	__xive_vm_h_int_get_source_info = xive_vm_h_int_get_source_info;
+	__xive_vm_h_int_get_source_config = xive_vm_h_int_get_source_config;
+	__xive_vm_h_int_get_queue_info = xive_vm_h_int_get_queue_info;
+	__xive_vm_h_int_get_queue_config = xive_vm_h_int_get_queue_config;
+	__xive_vm_h_int_set_os_reporting_line =
+		xive_vm_h_int_set_os_reporting_line;
+	__xive_vm_h_int_get_os_reporting_line =
+		xive_vm_h_int_get_os_reporting_line;
+	__xive_vm_h_int_esb = xive_vm_h_int_esb;
+	__xive_vm_h_int_sync = xive_vm_h_int_sync;
 }
 
 void kvmppc_xive_native_exit_module(void)
 {
-	;
+	__xive_vm_h_int_get_source_info = NULL;
+	__xive_vm_h_int_get_source_config = NULL;
+	__xive_vm_h_int_get_queue_info = NULL;
+	__xive_vm_h_int_get_queue_config = NULL;
+	__xive_vm_h_int_set_os_reporting_line = NULL;
+	__xive_vm_h_int_get_os_reporting_line = NULL;
+	__xive_vm_h_int_esb = NULL;
+	__xive_vm_h_int_sync = NULL;
 }
