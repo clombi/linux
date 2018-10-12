@@ -17,6 +17,7 @@ static const struct pci_device_id ocxl_pci_tbl[] = {
 };
 MODULE_DEVICE_TABLE(pci, ocxl_pci_tbl);
 
+static struct class *ocxl_pci_class;
 
 static struct ocxl_fn *ocxl_fn_get(struct ocxl_fn *fn)
 {
@@ -516,6 +517,8 @@ static struct ocxl_fn *init_function(struct pci_dev *dev)
 		return ERR_PTR(rc);
 	}
 
+	fn->dev.class = ocxl_pci_class;
+
 	rc = device_register(&fn->dev);
 	if (rc) {
 		deconfigure_function(fn);
@@ -589,3 +592,19 @@ struct pci_driver ocxl_pci_driver = {
 	.remove = ocxl_remove,
 	.shutdown = ocxl_remove,
 };
+
+int ocxl_pci_init(void)
+{
+	ocxl_pci_class = class_create(THIS_MODULE, "ocxl_pci");
+	if (IS_ERR(ocxl_pci_class)) {
+		pr_err("Unable to create ocxl_pci class\n");
+		return PTR_ERR(ocxl_pci_class);
+	}
+
+	return 0;
+}
+
+void ocxl_pci_exit(void)
+{
+	class_destroy(ocxl_pci_class);
+}

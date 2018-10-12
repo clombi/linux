@@ -104,6 +104,9 @@ extern void ocxl_unregister_afu(struct ocxl_afu *afu);
 extern int ocxl_file_init(void);
 extern void ocxl_file_exit(void);
 
+extern int ocxl_pci_init(void);
+extern void ocxl_pci_exit(void);
+
 extern int ocxl_pasid_afu_alloc(struct ocxl_fn *fn, u32 size);
 extern void ocxl_pasid_afu_free(struct ocxl_fn *fn, u32 start, u32 size);
 extern int ocxl_actag_afu_alloc(struct ocxl_fn *fn, u32 size);

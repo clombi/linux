@@ -12,8 +12,15 @@ static int __init init_ocxl(void)
 	if (rc)
 		return rc;
 
+	rc = ocxl_pci_init();
+	if (rc) {
+		ocxl_file_exit();
+		return rc;
+	}
+
 	rc = pci_register_driver(&ocxl_pci_driver);
 	if (rc) {
+		ocxl_pci_exit();
 		ocxl_file_exit();
 		return rc;
 	}
@@ -23,6 +30,7 @@ static int __init init_ocxl(void)
 static void exit_ocxl(void)
 {
 	pci_unregister_driver(&ocxl_pci_driver);
+	ocxl_pci_exit();
 	ocxl_file_exit();
 }
 
