@@ -183,7 +183,8 @@ extern void ocxl_link_release(struct pci_dev *dev, void *link_handle);
  * 'xsl_err_data' is an argument passed to the above callback, if
  * defined
  */
-extern int ocxl_link_add_pe(void *link_handle, int pasid, u32 pidr, u32 tidr,
+extern int ocxl_link_add_pe(void *link_handle, int pasid,
+		u32 lpid, u32 pidr, u32 tidr,
 		u64 amr, struct mm_struct *mm,
 		void (*xsl_err_cb)(void *data, u64 addr, u64 dsisr),
 		void *xsl_err_data);

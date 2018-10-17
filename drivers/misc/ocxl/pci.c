@@ -566,8 +566,11 @@ static int ocxl_probe(struct pci_dev *dev, const struct pci_device_id *id)
 	}
 	dev_info(&dev->dev, "%d AFU(s) configured\n", afu_count);
 
+#ifdef CONFIG_VFIO_MDEV
 	if (afu_count)
 		ocxl_mdev_register(fn);
+#endif
+
 	return 0;
 }
 

@@ -75,7 +75,9 @@ int ocxl_context_attach(struct ocxl_context *ctx, u64 amr)
 	}
 
 	rc = ocxl_link_add_pe(ctx->afu->fn->link, ctx->pasid,
-			current->mm->context.id, ctx->tidr, amr, current->mm,
+			mfspr(SPRN_LPID), current->mm->context.id,
+			ctx->tidr, amr,
+			current->mm,
 			xsl_fault_error, ctx);
 	if (rc)
 		goto out;

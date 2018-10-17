@@ -380,7 +380,8 @@ static int start_context(struct ocxlflash_context *ctx)
 		mm = current->mm;
 	}
 
-	rc = ocxl_link_add_pe(link_token, ctx->pe, pid, 0, 0, mm,
+	rc = ocxl_link_add_pe(link_token, ctx->pe,
+			      mfspr(SPRN_LPID), pid, 0, 0, mm,
 			      ocxlflash_xsl_fault, ctx);
 	if (unlikely(rc)) {
 		dev_err(dev, "%s: ocxl_link_add_pe failed rc=%d\n",

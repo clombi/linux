@@ -455,7 +455,7 @@ void ocxl_link_release(struct pci_dev *dev, void *link_handle)
 }
 EXPORT_SYMBOL_GPL(ocxl_link_release);
 
-static u64 calculate_cfg_state(bool kernel)
+static u64 calculate_cfg_state(u32 lpid, bool kernel)
 {
 	u64 state;
 
@@ -466,7 +466,8 @@ static u64 calculate_cfg_state(bool kernel)
 		state |= SPA_CFG_XLAT_ror;
 	else
 		state |= SPA_CFG_XLAT_hpt;
-	state |= SPA_CFG_HV;
+	if (lpid == 0)
+		state |= SPA_CFG_HV;
 	if (kernel) {
 		if (mfmsr() & MSR_SF)
 			state |= SPA_CFG_SF;
@@ -478,7 +479,8 @@ static u64 calculate_cfg_state(bool kernel)
 	return state;
 }
 
-int ocxl_link_add_pe(void *link_handle, int pasid, u32 pidr, u32 tidr,
+int ocxl_link_add_pe(void *link_handle, int pasid,
+		u32 lpid, u32 pidr, u32 tidr,
 		u64 amr, struct mm_struct *mm,
 		void (*xsl_err_cb)(void *data, u64 addr, u64 dsisr),
 		void *xsl_err_data)
@@ -513,12 +515,21 @@ int ocxl_link_add_pe(void *link_handle, int pasid, u32 pidr, u32 tidr,
 	pe_data->xsl_err_data = xsl_err_data;
 
 	memset(pe, 0, sizeof(struct ocxl_process_element));
-	pe->config_state = cpu_to_be64(calculate_cfg_state(pidr == 0));
-	pe->lpid = cpu_to_be32(mfspr(SPRN_LPID));
+	pe->config_state = cpu_to_be64(calculate_cfg_state(lpid, pidr == 0));
+	pe->lpid = cpu_to_be32(lpid);
 	pe->pid = cpu_to_be32(pidr);
 	pe->tid = cpu_to_be32(tidr);
 	pe->amr = cpu_to_be64(amr);
 	pe->software_state = cpu_to_be32(SPA_PE_VALID);
+	pr_debug("%s, config_state: %#llx, lpid: %#x, pid: %#x, "
+		 "tid: %#x, amr: %#llx, software_state: %#x\n",
+		 __func__,
+		 be64_to_cpu(pe->config_state),
+		 be32_to_cpu(pe->lpid),
+		 be32_to_cpu(pe->pid),
+		 be32_to_cpu(pe->tid),
+		 be64_to_cpu(pe->amr),
+		 be32_to_cpu(pe->software_state));
 
 	mm_context_add_copro(mm);
 	/*
