@@ -132,7 +132,12 @@ extern int ocxl_afu_irq_set_fd(struct ocxl_context *ctx, u64 irq_offset,
 			int eventfd);
 extern u64 ocxl_afu_irq_get_addr(struct ocxl_context *ctx, u64 irq_offset);
 
+#if IS_ENABLED(CONFIG_VFIO_MDEV)
 extern int ocxl_mdev_register(struct ocxl_fn *fn);
 extern void ocxl_mdev_unregister(struct ocxl_fn *fn);
+#else
+static inline int ocxl_mdev_register(struct ocxl_fn *fn) { return 0; }
+static inline void ocxl_mdev_unregister(struct ocxl_fn *fn) {}
+#endif
 
 #endif /* _OCXL_INTERNAL_H_ */
