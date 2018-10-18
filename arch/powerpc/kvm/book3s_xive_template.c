@@ -595,6 +595,14 @@ again:
 	 */
 	mb();
 	state->in_eoi = false;
+
+	/* HACK: if we're xive_vm_h_eoi(), ie, KVM module, then let's
+	 * notify KVM about this EOI.
+	 */
+#ifdef XIVE_RUNTIME_CHECKS
+	kvm_notify_acked_irq(vcpu->kvm, 0, irq);
+#endif
+
 bail:
 
 	/* Re-evaluate pending IRQs and update HW */
