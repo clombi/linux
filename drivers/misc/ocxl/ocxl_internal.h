@@ -6,6 +6,7 @@
 #include <linux/pci.h>
 #include <linux/cdev.h>
 #include <linux/list.h>
+#include <linux/mdev.h>
 #include <misc/ocxl.h>
 
 #define MAX_IRQ_PER_LINK	2000
@@ -140,4 +141,6 @@ static inline int ocxl_mdev_register(struct ocxl_fn *fn) { return 0; }
 static inline void ocxl_mdev_unregister(struct ocxl_fn *fn) {}
 #endif
 
+int ocxl_mdev_attach_pasid(struct mdev_device *mdev, int pasid, int lpid,
+			   int pidr);
 #endif /* _OCXL_INTERNAL_H_ */

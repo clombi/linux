@@ -34,6 +34,7 @@
 #include <linux/uaccess.h>
 #include <linux/vfio.h>
 #include <linux/wait.h>
+#include <linux/kvm_host.h>
 
 #define DRIVER_VERSION	"0.3"
 #define DRIVER_AUTHOR	"Alex Williamson <alex.williamson@redhat.com>"
@@ -498,6 +499,21 @@ struct vfio_group *vfio_group_get_from_iommu(struct iommu_group *iommu_group)
 
 	return NULL;
 }
+
+struct kvm *vfio_get_kvm_from_iommu(struct iommu_group *iommu_group)
+{
+	struct vfio_group *group = vfio_group_get_from_iommu(iommu_group);
+	struct kvm *kvm;
+
+	if (!group)
+		return NULL;
+
+	kvm_get_kvm(kvm = group->kvm);
+	vfio_group_put(group);
+
+	return kvm;
+}
+EXPORT_SYMBOL_GPL(vfio_get_kvm_from_iommu);
 
 static struct vfio_group *vfio_group_get_from_minor(int minor)
 {

@@ -760,6 +760,28 @@ static const struct mdev_parent_ops ocxl_mdev_ops = {
 	.ioctl			= ocxl_mdev_ioctl,
 };
 
+int ocxl_mdev_attach_pasid(struct mdev_device *mdev, int pasid, int lpid,
+			   int pidr)
+{
+	struct device *dev = mdev_dev(mdev);
+	struct mdev_state *mdev_state;
+	int rc;
+
+	mdev_state = mdev_get_drvdata(mdev);
+
+	dev_dbg(dev, "%s: pasid=%d lpid=%d pidr=%d\n", __func__, pasid, lpid,
+		pidr);
+	rc = ocxl_link_add_pe(mdev_state->fn->link,
+			      pasid, lpid, pidr, 0,
+			      0, current->mm,
+			      NULL, NULL);
+	if (rc)
+		dev_err(dev, "%s - Failed to add pe handle "
+			"pasid: %d lpid: %d (rc: %d)\n", __func__, pasid, lpid,
+			rc);
+	return rc;
+}
+
 int ocxl_mdev_register(struct ocxl_fn *fn)
 {
 	dev_dbg(&fn->dev, "Registering OpenCAPI function %p %s\n", fn,

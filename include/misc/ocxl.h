@@ -221,4 +221,7 @@ extern int ocxl_link_irq_alloc(void *link_handle, int *hw_irq,
  */
 extern void ocxl_link_free_irq(void *link_handle, int hw_irq);
 
+long ocxl_vfio_ioctl(struct iommu_group *group, unsigned int cmd,
+		     unsigned long arg);
+
 #endif /* _MISC_OCXL_H_ */

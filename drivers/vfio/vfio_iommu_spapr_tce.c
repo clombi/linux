@@ -23,6 +23,7 @@
 #include <linux/sched/mm.h>
 #include <linux/sched/signal.h>
 #include <linux/mdev.h>
+#include <misc/ocxl.h>
 
 #include <asm/iommu.h>
 #include <asm/tce.h>
@@ -780,6 +781,22 @@ static long tce_iommu_create_default_window(struct tce_container *container)
 	return ret;
 }
 
+static long vfio_ocxl_ioctl(struct iommu_group *group, unsigned int cmd,
+			    unsigned long arg)
+{
+	long ret, (*fn)(struct iommu_group *, unsigned int, unsigned long);
+
+	fn = symbol_get(ocxl_vfio_ioctl);
+	if (!fn)
+		return -ENOTTY;
+
+	ret = fn(group, cmd, arg);
+
+	symbol_put(ocxl_vfio_ioctl);
+
+	return ret;
+}
+
 static long tce_iommu_ioctl(void *iommu_data,
 				 unsigned int cmd, unsigned long arg)
 {
@@ -795,7 +812,10 @@ static long tce_iommu_ioctl(void *iommu_data,
 			ret = 1;
 			break;
 		default:
-			ret = vfio_spapr_iommu_eeh_ioctl(NULL, cmd, arg);
+			ret = vfio_ocxl_ioctl(NULL, cmd, arg);
+			if (ret < 0)
+				ret = vfio_spapr_iommu_eeh_ioctl(NULL, cmd,
+								 arg);
 			break;
 		}
 
@@ -1055,6 +1075,18 @@ static long tce_iommu_ioctl(void *iommu_data,
 		list_for_each_entry(tcegrp, &container->group_list, next) {
 			ret = vfio_spapr_iommu_eeh_ioctl(tcegrp->grp,
 					cmd, arg);
+			if (ret)
+				return ret;
+		}
+		return ret;
+	}
+
+	case VFIO_OCXL_OP: {
+		struct tce_iommu_group *tcegrp;
+
+		ret = 0;
+		list_for_each_entry(tcegrp, &container->group_list, next) {
+			ret = vfio_ocxl_ioctl(tcegrp->grp, cmd, arg);
 			if (ret)
 				return ret;
 		}

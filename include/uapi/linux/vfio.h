@@ -46,6 +46,8 @@
  */
 #define VFIO_NOIOMMU_IOMMU		8
 
+#define VFIO_OCXL			9
+
 /*
  * The IOCTL interface is designed for extensibility by embedding the
  * structure length (argsz) and flags into structures passed between
@@ -813,6 +815,25 @@ struct vfio_iommu_spapr_tce_remove {
 	__u64 start_addr;
 };
 #define VFIO_IOMMU_SPAPR_TCE_REMOVE	_IO(VFIO_TYPE, VFIO_BASE + 20)
+
+struct vfio_ocxl_attach {
+	__u32 pasid;
+	__u32 pidr;
+};
+
+struct vfio_ocxl_op {
+	__u32 argsz;
+	__u32 flags;
+	__u32 op;
+	union {
+		struct vfio_ocxl_attach attach;
+	};
+};
+
+#define VFIO_OCXL_ATTACH		1
+
+#define VFIO_OCXL_OP			_IO(VFIO_TYPE, VFIO_BASE + 66)
+
 
 /* ***************************************************************** */
 

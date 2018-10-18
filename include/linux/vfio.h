@@ -135,6 +135,7 @@ extern struct bus_type *vfio_iommu_group_to_bus(
 
 struct kvm;
 extern void vfio_group_set_kvm(struct vfio_group *group, struct kvm *kvm);
+extern struct kvm *vfio_get_kvm_from_iommu(struct iommu_group *iommu_group);
 
 /*
  * Sub-module helpers
