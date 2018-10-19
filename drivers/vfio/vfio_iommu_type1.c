@@ -1165,18 +1165,6 @@ out_unlock:
 	return ret;
 }
 
-static int vfio_bus_type(struct device *dev, void *data)
-{
-	struct bus_type **bus = data;
-
-	if (*bus && *bus != dev->bus)
-		return -EINVAL;
-
-	*bus = dev->bus;
-
-	return 0;
-}
-
 static int vfio_iommu_replay(struct vfio_iommu *iommu,
 			     struct vfio_domain *domain)
 {
@@ -1333,7 +1321,7 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 	struct vfio_iommu *iommu = iommu_data;
 	struct vfio_group *group;
 	struct vfio_domain *domain, *d;
-	struct bus_type *bus = NULL, *mdev_bus;
+	struct bus_type *bus, *mdev_bus;
 	int ret;
 	bool resv_msi, msi_remap;
 	phys_addr_t resv_msi_base;
@@ -1364,9 +1352,11 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 	group->iommu_group = iommu_group;
 
 	/* Determine bus_type in order to allocate a domain */
-	ret = iommu_group_for_each_dev(iommu_group, &bus, vfio_bus_type);
-	if (ret)
+	bus = vfio_iommu_group_to_bus(iommu_group);
+	if (!bus) {
+		ret = -EINVAL;
 		goto out_free;
+	}
 
 	mdev_bus = symbol_get(mdev_bus_type);
 

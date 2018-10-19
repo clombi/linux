@@ -130,6 +130,9 @@ extern int vfio_unregister_notifier(struct device *dev,
 				    enum vfio_notify_type type,
 				    struct notifier_block *nb);
 
+extern struct bus_type *vfio_iommu_group_to_bus(
+					struct iommu_group *iommu_group);
+
 struct kvm;
 extern void vfio_group_set_kvm(struct vfio_group *group, struct kvm *kvm);
 

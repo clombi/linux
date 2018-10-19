@@ -2177,6 +2177,30 @@ int vfio_unregister_notifier(struct device *dev, enum vfio_notify_type type,
 }
 EXPORT_SYMBOL(vfio_unregister_notifier);
 
+static int vfio_bus_type(struct device *dev, void *data)
+{
+	struct bus_type **bus = data;
+
+	if (*bus && *bus != dev->bus)
+		return 1;
+
+	*bus = dev->bus;
+
+	return 0;
+}
+
+struct bus_type *vfio_iommu_group_to_bus(struct iommu_group *iommu_group)
+{
+	struct bus_type *bus = NULL;
+
+	if (iommu_group_for_each_dev(iommu_group, &bus, vfio_bus_type))
+		return NULL;
+
+	return bus;
+}
+EXPORT_SYMBOL_GPL(vfio_iommu_group_to_bus);
+
+
 /**
  * Module/class support
  */
