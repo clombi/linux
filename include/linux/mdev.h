@@ -13,6 +13,8 @@
 #ifndef MDEV_H
 #define MDEV_H
 
+#include <linux/module.h>
+
 struct mdev_device;
 
 /**
@@ -134,5 +136,19 @@ extern void mdev_unregister_driver(struct mdev_driver *drv);
 extern struct device *mdev_parent_dev(struct mdev_device *mdev);
 extern struct device *mdev_dev(struct mdev_device *mdev);
 extern struct mdev_device *mdev_from_dev(struct device *dev);
+
+/* Keep it inline so that it can be used even if mdev is not loaded */
+static inline bool mdev_bus_is_mdev(struct bus_type *bus)
+{
+	struct bus_type *mdev_bus;
+
+	mdev_bus = symbol_get(mdev_bus_type);
+	if (!mdev_bus)
+		return false;
+	symbol_put(mdev_bus_type);
+
+	return bus == mdev_bus;
+}
+
 
 #endif /* MDEV_H */

@@ -1321,7 +1321,7 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 	struct vfio_iommu *iommu = iommu_data;
 	struct vfio_group *group;
 	struct vfio_domain *domain, *d;
-	struct bus_type *bus, *mdev_bus;
+	struct bus_type *bus;
 	int ret;
 	bool resv_msi, msi_remap;
 	phys_addr_t resv_msi_base;
@@ -1358,23 +1358,17 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 		goto out_free;
 	}
 
-	mdev_bus = symbol_get(mdev_bus_type);
+	if (mdev_bus_is_mdev(bus) && !iommu_present(bus)) {
+		if (!iommu->external_domain) {
+			INIT_LIST_HEAD(&domain->group_list);
+			iommu->external_domain = domain;
+		} else
+			kfree(domain);
 
-	if (mdev_bus) {
-		if ((bus == mdev_bus) && !iommu_present(bus)) {
-			symbol_put(mdev_bus_type);
-			if (!iommu->external_domain) {
-				INIT_LIST_HEAD(&domain->group_list);
-				iommu->external_domain = domain;
-			} else
-				kfree(domain);
-
-			list_add(&group->next,
-				 &iommu->external_domain->group_list);
-			mutex_unlock(&iommu->lock);
-			return 0;
-		}
-		symbol_put(mdev_bus_type);
+		list_add(&group->next,
+			 &iommu->external_domain->group_list);
+		mutex_unlock(&iommu->lock);
+		return 0;
 	}
 
 	domain->domain = iommu_domain_alloc(bus);
