@@ -22,6 +22,7 @@
 #include <linux/vmalloc.h>
 #include <linux/sched/mm.h>
 #include <linux/sched/signal.h>
+#include <linux/mdev.h>
 
 #include <asm/iommu.h>
 #include <asm/tce.h>
@@ -110,6 +111,7 @@ struct tce_container {
 	bool enabled;
 	bool v2;
 	bool def_window_pending;
+	struct iommu_table_group *external_table_group;
 	unsigned long locked_pages;
 	struct mm_struct *mm;
 	struct iommu_table *tables[IOMMU_TABLE_GROUP_MAX_TABLES];
@@ -1248,15 +1250,28 @@ static int tce_iommu_attach_group(void *iommu_data,
 	struct tce_container *container = iommu_data;
 	struct iommu_table_group *table_group;
 	struct tce_iommu_group *tcegrp = NULL;
+	struct bus_type *bus;
 
 	mutex_lock(&container->lock);
 
-	/* pr_debug("tce_vfio: Attaching group #%u to iommu %p\n",
-			iommu_group_id(iommu_group), iommu_group); */
-	table_group = iommu_group_get_iommudata(iommu_group);
-	if (!table_group) {
-		ret = -ENODEV;
+	bus = vfio_iommu_group_to_bus(iommu_group);
+	if (!bus) {
+		ret = -EINVAL;
 		goto unlock_exit;
+	}
+
+	if (mdev_bus_is_mdev(bus)) {
+		table_group = kzalloc(sizeof(*table_group), GFP_KERNEL);
+		iommu_group_set_iommudata(iommu_group, table_group, NULL);
+		container->external_table_group = table_group;
+	} else {
+		/* pr_debug("tce_vfio: Attaching group #%u to iommu %p\n",
+		   iommu_group_id(iommu_group), iommu_group); */
+		table_group = iommu_group_get_iommudata(iommu_group);
+		if (!table_group) {
+			ret = -ENODEV;
+			goto unlock_exit;
+		}
 	}
 
 	if (tce_groups_attached(container) && (!table_group->ops ||
@@ -1293,21 +1308,27 @@ static int tce_iommu_attach_group(void *iommu_data,
 		goto unlock_exit;
 	}
 
-	if (!table_group->ops || !table_group->ops->take_ownership ||
-			!table_group->ops->release_ownership) {
-		if (container->v2) {
-			ret = -EPERM;
-			goto unlock_exit;
-		}
-		ret = tce_iommu_take_ownership(container, table_group);
+	if (container->external_table_group) {
+		ret = 0;
 	} else {
-		if (!container->v2) {
-			ret = -EPERM;
-			goto unlock_exit;
+		if (!table_group->ops || !table_group->ops->take_ownership ||
+		    !table_group->ops->release_ownership) {
+			if (container->v2) {
+				ret = -EPERM;
+				goto unlock_exit;
+			}
+			ret = tce_iommu_take_ownership(container, table_group);
+		} else {
+			if (!container->v2) {
+				ret = -EPERM;
+				goto unlock_exit;
+			}
+			ret = tce_iommu_take_ownership_ddw(container,
+							   table_group);
+			if (!tce_groups_attached(container) &&
+			    !container->tables[0])
+				container->def_window_pending = true;
 		}
-		ret = tce_iommu_take_ownership_ddw(container, table_group);
-		if (!tce_groups_attached(container) && !container->tables[0])
-			container->def_window_pending = true;
 	}
 
 	if (!ret) {
@@ -1353,7 +1374,10 @@ static void tce_iommu_detach_group(void *iommu_data,
 	table_group = iommu_group_get_iommudata(iommu_group);
 	BUG_ON(!table_group);
 
-	if (!table_group->ops || !table_group->ops->release_ownership)
+	if (table_group == container->external_table_group) {
+		kfree(table_group);
+		container->external_table_group = NULL;
+	} else if (!table_group->ops || !table_group->ops->release_ownership)
 		tce_iommu_release_ownership(container, table_group);
 	else
 		tce_iommu_release_ownership_ddw(container, table_group);
