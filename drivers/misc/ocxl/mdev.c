@@ -1,41 +1,28 @@
-// SPDX-License-Identifier: GPL-2.0
-/*
- * Mediated device for CXL
- *
- * Copyright IBM Corp. 2018
- *
- * Author(s): Greg Kurz <groug@kaod.org>
- */
-
+// SPDX-License-Identifier: GPL-2.0+
+// Copyright 2018 IBM Corp.
 #include <linux/vfio.h>
 #include <linux/mdev.h>
 #include <misc/ocxl-config.h>
 
 #include "ocxl_internal.h"
 
-#define OCXL_DVSEC_PASID_MASK           GENMASK(19, 0)
+#define MDEV_DVSEC_PASID_MASK           GENMASK(19, 0)
+#define MDEV_CONFIG_SPACE_SIZE          PCI_CFG_SPACE_EXP_SIZE
+#define MDEV_CAPABILITY_SIZE            0x100
+#define MDEV_AFU_DESC_TEMPLATE_SIZE     0x58
+#define MDEV_BAR0_REGION_OFFSET         0x1000000
 
-#define OCXL_MDEV_CONFIG_SPACE_SIZE     PCI_CFG_SPACE_EXP_SIZE
-#define OCXL_MDEV_EXT_CAP_CONFIG_SPACE  0x100
+#define EXTRACT_BIT(val, bit) (!!(val & BIT(bit)))
 
-/* Extended Capabilities starts at offset x’100’ */
-#define CAPABILITY_SIZE                 0x100
-
-#define OCXL_PASID_MAX_WIDTH            0x4
-
-#define PCI_EXT_CAP_VER_SHIFT           16
-#define PCI_EXT_CAP_NEXT_SHIFT          20
+#define PCI_EXT_CAP_VER_SHIFT      16
+#define PCI_EXT_CAP_NEXT_SHIFT     20
 
 #define PCI_EXT_CAP(id, ver, next)         \
     ((id) |                                \
      ((ver) << PCI_EXT_CAP_VER_SHIFT) |    \
      ((next) << PCI_EXT_CAP_NEXT_SHIFT))
 
-/*BAR0 + x200_0000 : BAR0 + x3FF_FFFF
- *AFU per Process PSA (64kB per Process, max 512 processes)
- */
-#define OCXL_MDEV_BAR0_REGION_OFFSET           0x1000000
-#define OCXL_MDEV_BAR0_REGION_SIZE             0x4000000
+#define CFG_TIMEOUT                3
 
 /* State of each mdev device */
 struct mdev_state {
@@ -44,7 +31,11 @@ struct mdev_state {
 
 	struct vfio_device_info dev_info;
 
+	u32 bar0_size;      /* size of BAR0 */
+
 	u8 *vconfig;        /* virtual PCI Config */
+	u8 *vafudesc;       /* virtual AFU descriptor */
+
 	u16 pasid_cap_pos;  /* Offset of PASID Capability */
 	u16 dvsec_tl_pos;   /* Offset of the DVSEC - Transport Layer */
 	u16 dvsec_fc_pos;   /* Offset of the DVSEC - Function Configuration */
@@ -84,42 +75,31 @@ static struct attribute_group *mdev_type_groups[] = {
 	NULL,
 };
 
-static void pci_read_config(struct pci_dev *pcidev,
-			    void *val, size_t count, loff_t pos)
+int ocxl_mdev_attach_pasid(struct mdev_device *mdev, int pasid, int lpid,
+			   int pidr)
 {
-	switch(count) {
-	case 4:
-	pci_read_config_dword(pcidev, pos, (u32 *)val);
-	break;
-	case 2:
-	pci_read_config_word(pcidev, pos, (u16 *)val);
-	break;
-	case 1:
-	pci_read_config_byte(pcidev, pos, (u8 *)val);
-	break;
-	}
+	struct device *dev = mdev_dev(mdev);
+	struct mdev_state *mdev_state;
+	int rc;
+
+	mdev_state = mdev_get_drvdata(mdev);
+
+	dev_dbg(dev, "%s: pasid=%d lpid=%d pidr=%d\n",
+		     __func__, pasid, lpid, pidr);
+	rc = ocxl_link_add_pe(mdev_state->fn->link,
+			      pasid, lpid, pidr, 0,
+			      0, current->mm,
+			      NULL, NULL);
+	if (rc)
+		dev_err(dev, "%s - Failed to add pe handle "
+			"pasid: %d lpid: %d (rc: %d)\n", __func__, pasid, lpid,
+			rc);
+	return rc;
 }
 
-static void pci_write_config(struct pci_dev *pcidev,
-			     void *val, size_t count, loff_t pos)
+static u16 find_dvsec(struct pci_dev *dev, int dvsec_id, u16 *last_pos)
 {
-	switch(count) {
-	case 4:
-	pci_write_config_dword(pcidev, pos, *(u32 *)val);
-	break;
-	case 2:
-	pci_write_config_word(pcidev, pos, *(u16 *)val);
-	break;
-	case 1:
-	pci_write_config_byte(pcidev, pos, *(u8 *)val);
-	break;
-	}
-}
-
-static int find_dvsec(struct pci_dev *dev, int dvsec_id)
-{
-	int vsec = 0;
-	u16 vendor, id;
+	u16 vsec = 0, vendor, id;
 
 	while ((vsec = pci_find_next_ext_capability(dev, vsec,
 						    OCXL_EXT_CAP_ID_DVSEC))) {
@@ -128,91 +108,107 @@ static int find_dvsec(struct pci_dev *dev, int dvsec_id)
 		pci_read_config_word(dev, vsec + OCXL_DVSEC_ID_OFFSET, &id);
 		if (vendor == PCI_VENDOR_ID_IBM && id == dvsec_id)
 			return vsec;
+		*last_pos = vsec;
+		pr_debug("%s - last_pos: %#x\n", __func__, *last_pos);
 	}
 	return 0;
 }
 
-static u16 add_dvsec(struct pci_dev *pcidev, struct mdev_state *mdev_state,
-		     int dvsec_id, u16 default_val) 
+static u16 add_dvsec(struct pci_dev *pcidev,
+		     struct mdev_state *mdev_state,
+		     int dvsec_id) 
 {
-	u16 pos, next_cap_pos;
+	u16 pos, last_pos = 0;
 
-	pos = find_dvsec(pcidev, dvsec_id);
-	if (!pos) {
-		pr_debug("%s - Can't find dvsec id: %#x. Use default value\n",
-			 __func__, dvsec_id);
-		pos = default_val;
-	}
-	next_cap_pos = pos + CAPABILITY_SIZE;
+	pos = find_dvsec(pcidev, dvsec_id, &last_pos);
+	if (pos)
+		return pos;
 
+	pos = last_pos + MDEV_CAPABILITY_SIZE;
+	pr_debug("%s - Can't find dvsec id: %#x. Create a new entry, "
+		 "pos: %#x, last_pos: %#x\n",
+		 __func__, dvsec_id, pos, last_pos);
+	*(u32 *)&mdev_state->vconfig[last_pos] =
+		PCI_EXT_CAP(OCXL_EXT_CAP_ID_DVSEC, 0x1, pos);
 	*(u32 *)&mdev_state->vconfig[pos] =
-		PCI_EXT_CAP(OCXL_EXT_CAP_ID_DVSEC, 0x1, next_cap_pos);
+		PCI_EXT_CAP(OCXL_EXT_CAP_ID_DVSEC, 0x1, 0);
 	*(u32 *)&mdev_state->vconfig[pos + OCXL_DVSEC_VENDOR_OFFSET] = PCI_VENDOR_ID_IBM;
 	*(u32 *)&mdev_state->vconfig[pos + OCXL_DVSEC_ID_OFFSET] = dvsec_id;
 
 	return pos;
 }
 
-static void create_config_space(struct mdev_state *mdev_state)
+static int read_afu_info(struct pci_dev *pcidev,
+			 struct mdev_state *mdev_state,
+			 int offset, u32 *data)
+{
+	u32 val;
+	unsigned long timeout = jiffies + (HZ * CFG_TIMEOUT);
+	int pos = mdev_state->dvsec_info_pos;
+
+	pci_write_config_dword(pcidev, pos + OCXL_DVSEC_AFU_INFO_OFF, offset);
+	pci_read_config_dword(pcidev, pos + OCXL_DVSEC_AFU_INFO_OFF, &val);
+	while (!EXTRACT_BIT(val, 31)) {
+		if (time_after_eq(jiffies, timeout))
+			return -EBUSY;
+		cpu_relax();
+		pci_read_config_dword(pcidev, pos + OCXL_DVSEC_AFU_INFO_OFF, &val);
+	}
+	pci_read_config_dword(pcidev, pos + OCXL_DVSEC_AFU_INFO_DATA, data);
+	return 0;
+}
+
+static int update_config_space(struct mdev_state *mdev_state)
+{
+	u8 val8;
+	int pos;
+
+	/* Max PASID Width for each guest -> 128 */
+	pos = mdev_state->pasid_cap_pos + PCI_PASID_CAP;
+	memcpy(&val8, mdev_state->vconfig + pos, sizeof(val8));
+
+	val8 &= ~GENMASK(12, 8);
+	val8 |= (0x7 << 8);
+	memcpy(mdev_state->vconfig + pos, &val8, sizeof(val8));
+
+	/* AFU PASID Length Supported -> 128 */
+	pos = mdev_state->dvsec_control_pos + OCXL_DVSEC_AFU_CTRL_PASID_SUP;
+	memcpy(&val8, mdev_state->vconfig + pos, sizeof(val8));
+
+	val8 &= ~GENMASK(8, 0);
+	val8 |= 0x7;
+	memcpy(mdev_state->vconfig + pos, &val8, sizeof(val8));
+
+	return 0;
+}
+
+static int create_config_space(struct mdev_state *mdev_state)
 {
 	struct pci_dev *pcidev = to_pci_dev(mdev_state->fn->dev.parent);
-	u16 pos, next_cap_pos;
+	u32 val;
+	int i, pos;
 
-	/* bar address */
-	*(u32 *)&mdev_state->vconfig[PCI_BASE_ADDRESS_0] =
-		   PCI_BASE_ADDRESS_SPACE_MEMORY | PCI_BASE_ADDRESS_MEM_TYPE_64;
-	*(u32 *)&mdev_state->vconfig[PCI_BASE_ADDRESS_1] = 0x00000000;
-	*(u32 *)&mdev_state->vconfig[PCI_BASE_ADDRESS_2] = 0x00000000;
-	*(u32 *)&mdev_state->vconfig[PCI_BASE_ADDRESS_3] = 0x00000000;
-	*(u32 *)&mdev_state->vconfig[PCI_BASE_ADDRESS_4] = 0x00000000;
-	*(u32 *)&mdev_state->vconfig[PCI_BASE_ADDRESS_5] = 0x00000000;
-
-
-	/* Process Address Space ID Extended Capability */
-	pos = pci_find_ext_capability(pcidev, PCI_EXT_CAP_ID_PASID);
-	if (!pos) {
-		pr_debug("%s - Can't find PASID capability, use default value\n",
-			 __func__);
-		pos = PCI_CFG_SPACE_SIZE;
+	/* Copy the original pci config */
+	for (i = 0; i < MDEV_CONFIG_SPACE_SIZE; i+=4) {
+		pci_read_config_dword(pcidev, i, &val);
+		memcpy(mdev_state->vconfig + i, &val, sizeof(val));
 	}
-	next_cap_pos = pos + CAPABILITY_SIZE;
-	*(u32 *)&mdev_state->vconfig[pos] =
-		PCI_EXT_CAP(PCI_EXT_CAP_ID_PASID, 0x1, next_cap_pos);
-	*(u32 *)&mdev_state->vconfig[pos + OCXL_PASID_MAX_WIDTH] = 0x00000900;
-	mdev_state->pasid_cap_pos = pos;
-	pr_debug("%s - Process Address Space ID Extended Capability, pos: %#x\n",
-		 __func__, mdev_state->pasid_cap_pos);
 
-	/* Designated Vendor Specific Extended Capabilities - Transport Layer */
-	pos = add_dvsec(pcidev, mdev_state, OCXL_DVSEC_TL_ID, next_cap_pos);
-	next_cap_pos = pos + CAPABILITY_SIZE;
-	mdev_state->dvsec_tl_pos = pos;
-	pr_debug("%s - DVSEC Transport Layer, pos: %#x\n",
-		 __func__, mdev_state->dvsec_tl_pos);
+	/* Designated Vendor Specific Extended Capabilities */
+	mdev_state->pasid_cap_pos = pci_find_ext_capability(pcidev, PCI_EXT_CAP_ID_PASID);
+	mdev_state->dvsec_tl_pos = add_dvsec(pcidev, mdev_state, OCXL_DVSEC_TL_ID);
+	mdev_state->dvsec_fc_pos = add_dvsec(pcidev, mdev_state, OCXL_DVSEC_FUNC_ID);
+	mdev_state->dvsec_info_pos = add_dvsec(pcidev, mdev_state, OCXL_DVSEC_AFU_INFO_ID);
+	mdev_state->dvsec_control_pos = add_dvsec(pcidev, mdev_state, OCXL_DVSEC_AFU_CTRL_ID);
 
-	/* Designated Vendor Specific Extended Capabilities - Function Configuration */
-	pos = add_dvsec(pcidev, mdev_state, OCXL_DVSEC_FUNC_ID, next_cap_pos);
-	next_cap_pos = pos + CAPABILITY_SIZE;
-	*(u32 *)&mdev_state->vconfig[pos + OCXL_DVSEC_ID_OFFSET] |= (0x1 << 31);
-	mdev_state->dvsec_fc_pos = pos;
-	pr_debug("%s - Function Configuration, pos: %#x\n",
-		 __func__, mdev_state->dvsec_fc_pos);
+	/* Copy the AFU Descriptor Template Data */
+	pos = mdev_state->dvsec_info_pos;
+	for (i = 0; i < MDEV_AFU_DESC_TEMPLATE_SIZE; i+=4) {
+		read_afu_info(pcidev, mdev_state, i, &val);
+		memcpy(mdev_state->vafudesc + i, &val, sizeof(val));
+	}
 
-	/* Designated Vendor Specific Extended Capabilities - AFU Information */
-	pos = add_dvsec(pcidev, mdev_state, OCXL_DVSEC_AFU_INFO_ID, next_cap_pos);
-	next_cap_pos = pos + CAPABILITY_SIZE;
-	mdev_state->dvsec_info_pos = pos;
-	pr_debug("%s - AFU Information, pos: %#x\n",
-		 __func__, mdev_state->dvsec_info_pos);
-
-	/* Designated Vendor Specific Extended Capabilities - AFU Control */
-	pos = add_dvsec(pcidev, mdev_state, OCXL_DVSEC_AFU_CTRL_ID, next_cap_pos);
-	next_cap_pos = 0;
-	*(u32 *)&mdev_state->vconfig[pos] =
-		PCI_EXT_CAP(OCXL_EXT_CAP_ID_DVSEC, 0x1, next_cap_pos);
-	mdev_state->dvsec_control_pos = pos;
-	pr_debug("%s - AFU Control, pos: %#x\n",
-		 __func__, pos);
+	return 0;
 }
 
 static int ocxl_mdev_create(struct kobject *kobj, struct mdev_device *mdev)
@@ -220,6 +216,7 @@ static int ocxl_mdev_create(struct kobject *kobj, struct mdev_device *mdev)
 	struct ocxl_fn *fn = to_ocxl_function(mdev_parent_dev(mdev));
 	struct device *dev = mdev_dev(mdev);
 	struct mdev_state *mdev_state;
+	int rc = 0;
 
 	dev_dbg(dev, "Creating virtual OpenCAPI function %p\n", fn);
 
@@ -227,8 +224,15 @@ static int ocxl_mdev_create(struct kobject *kobj, struct mdev_device *mdev)
 	if (mdev_state == NULL)
 		return -ENOMEM;
 
-	mdev_state->vconfig = kzalloc(OCXL_MDEV_CONFIG_SPACE_SIZE, GFP_KERNEL);
+	mdev_state->vconfig = kzalloc(MDEV_CONFIG_SPACE_SIZE, GFP_KERNEL);
 	if (mdev_state->vconfig == NULL) {
+		kfree(mdev_state);
+		return -ENOMEM;
+	}
+
+	mdev_state->vafudesc = kzalloc(MDEV_AFU_DESC_TEMPLATE_SIZE, GFP_KERNEL);
+	if (mdev_state->vafudesc == NULL) {
+		kfree(mdev_state->vconfig);
 		kfree(mdev_state);
 		return -ENOMEM;
 	}
@@ -248,12 +252,20 @@ static int ocxl_mdev_create(struct kobject *kobj, struct mdev_device *mdev)
 		dev_err(dev, "Error mapping pp mmio area\n");
 		return -ENOMEM;
 	}
+
+	mdev_state->bar0_size = mdev_state->afu->config.global_mmio_offset +
+				mdev_state->afu->config.global_mmio_size +
+				(mdev_state->afu->config.pp_mmio_stride *
+				mdev_state->afu->pasid_max);
+
 	mutex_init(&mdev_state->ops_lock);
 	mdev_set_drvdata(mdev, mdev_state);
 
-	create_config_space(mdev_state);
+	rc = create_config_space(mdev_state);
+	if (!rc)
+		rc = update_config_space(mdev_state);
 
-	return 0;
+	return rc;
 }
 
 static int ocxl_mdev_remove(struct mdev_device *mdev)
@@ -270,6 +282,7 @@ static int ocxl_mdev_remove(struct mdev_device *mdev)
 	}
 
 	mdev_set_drvdata(mdev, NULL);
+	kfree(mdev_state->vafudesc);
 	kfree(mdev_state->vconfig);
 	kfree(mdev_state);
 	return 0;
@@ -298,20 +311,11 @@ static int handle_pci_cfg_write(struct mdev_device *mdev,
 	struct device *dev = mdev_dev(mdev);
 	int rc = 0, pasid;
 
-	pr_debug("%s - count: %ld, pos: %#llx, val: %#x\n",
-		 __func__, count, pos, *(u32 *)val);
+	if (pos == mdev_state->dvsec_info_pos + OCXL_DVSEC_AFU_INFO_OFF)
+		*(u32 *)val |= 1<<31;
 
-	if (pos < PCI_CFG_SPACE_SIZE) {
-		memcpy((mdev_state->vconfig + pos), val, count);
-	}
-	else if (pos == (mdev_state->dvsec_info_pos +
-			 OCXL_DVSEC_AFU_INFO_OFF)) {
-			pci_write_config(pcidev, val, count, pos);
-	}
-	else if (pos == (mdev_state->dvsec_control_pos +
-			 OCXL_DVSEC_AFU_CTRL_TERM_PASID)) {
-		pasid = *(u32 *)val & OCXL_DVSEC_PASID_MASK;
-		pr_debug("%s - Terminate pasid: %d\n", __func__, pasid);
+	if (pos == mdev_state->dvsec_control_pos + OCXL_DVSEC_AFU_CTRL_TERM_PASID) {
+		pasid = *(u32 *)val & MDEV_DVSEC_PASID_MASK;
 
 		rc = ocxl_config_terminate_pasid(pcidev,
 						 mdev_state->dvsec_control_pos,
@@ -330,11 +334,9 @@ static int handle_pci_cfg_write(struct mdev_device *mdev,
 		}
 
 		*(u32 *)val &= ~(1<<20);
-		memcpy((mdev_state->vconfig + pos), val, count);
 	}
-	else {
-		memcpy((mdev_state->vconfig + pos), val, count);
-	}
+
+	memcpy(mdev_state->vconfig + pos, val, count);
 
 	return 0;
 }
@@ -343,120 +345,89 @@ static int handle_pci_cfg_read(struct mdev_device *mdev,
 			       void *val, size_t count, loff_t pos)
 {
 	struct mdev_state *mdev_state = mdev_get_drvdata(mdev);
-	struct pci_dev *pcidev = to_pci_dev(mdev_state->fn->dev.parent);
-	int rc = 0;
+	u32 offset;
 
-#if 0
-	pr_debug("%s - count: %ld, pos: %#llx\n", __func__, count, pos);
-#endif
+	if (pos == mdev_state->dvsec_info_pos + OCXL_DVSEC_AFU_INFO_DATA) {
+		offset = mdev_state->vconfig[mdev_state->dvsec_info_pos +
+			                     OCXL_DVSEC_AFU_INFO_OFF];
+		offset &= 0x7ffffff;
+		if (offset >= MDEV_AFU_DESC_TEMPLATE_SIZE)
+			return -EINVAL;
 
-	switch (pos) {
-	case 0 ... (PCI_CFG_SPACE_SIZE-1):
-		if ((pos >= PCI_BASE_ADDRESS_0) &&
-		    (pos <= PCI_BASE_ADDRESS_5)) {
-			memcpy(val, (mdev_state->vconfig + pos), count);
-		} else if (pos == PCI_ROM_ADDRESS) {
-			memcpy(val, (mdev_state->vconfig + pos), count);
-		} else {
-			pci_read_config(pcidev, val, count, pos);
-		}
-	break;
-	case PCI_CFG_SPACE_SIZE ... (OCXL_MDEV_CONFIG_SPACE_SIZE-1):
-		if ((pos == mdev_state->pasid_cap_pos) ||
-		    (pos == mdev_state->pasid_cap_pos + 0x4)||
-		    (pos == mdev_state->pasid_cap_pos + 0x8)||
-		    (pos == mdev_state->dvsec_tl_pos) ||
-		    (pos == mdev_state->dvsec_tl_pos + 0x4)||
-		    (pos == mdev_state->dvsec_tl_pos + 0x8)||
-		    (pos == mdev_state->dvsec_fc_pos) ||
-		    (pos == mdev_state->dvsec_fc_pos + 0x4)||
-		    (pos == mdev_state->dvsec_fc_pos + 0x8)||
-		    (pos == mdev_state->dvsec_info_pos) ||
-		    (pos == mdev_state->dvsec_info_pos + 0x4)||
-		    (pos == mdev_state->dvsec_info_pos + 0x8)||
-		    (pos == mdev_state->dvsec_control_pos) ||
-		    (pos == mdev_state->dvsec_control_pos + 0x4)||
-		    (pos == mdev_state->dvsec_control_pos + 0x8))
-			memcpy(val, (mdev_state->vconfig + pos), count);
-		else
-			pci_read_config(pcidev, val, count, pos);
-	break;
-	}
+		memcpy(val, mdev_state->vafudesc + offset, count);
+	} else
+		memcpy(val, mdev_state->vconfig + pos, count);
 
-	return rc;
+	return 0;
 }
 
-static int handle_bar_write(struct mdev_device *mdev,
-			    void *val, size_t count, loff_t pos)
+static void op_bar(void __iomem *addr, void *val, size_t count,
+		   bool is_write)
+{
+	switch(count) {
+	case 8:
+	if (is_write)
+		out_le64((u64 __iomem *)addr, *(u64 *)val);
+	case 4:
+	if (is_write)
+		out_le32((u32 __iomem *)addr, *(u32 *)val);
+	else
+		*(u32 *)val = in_le32((u32 __iomem *)addr);
+	break;
+	case 2:
+	if (is_write)
+		out_le16((u16 __iomem *)addr, *(u16 *)val);
+	else
+		*(u16 *)val = in_le16((u16 __iomem *)addr);
+	break;
+	case 1:
+	if (is_write)
+		out_8((u8 __iomem *)addr, *(u8 *)val);
+	else
+		*(u8 *)val = in_8((u8 __iomem *)addr);
+	break;
+	}
+}
+
+static int handle_bar(struct mdev_device *mdev, void *val, size_t count,
+		      loff_t pos, bool is_write)
 {
 	struct mdev_state *mdev_state = mdev_get_drvdata(mdev);
 	struct device *dev = mdev_dev(mdev);
-	struct ocxl_afu *afu;
-	int pasid, offset, addr;
-	u32 lpid = 0, pidr = 0, tidr = 0;
-	int rc;
+	struct ocxl_afu *afu = mdev_state->afu;
+	int pasid, offset;
+	int rc = 0;
 
-	addr = pos - OCXL_MDEV_BAR0_REGION_OFFSET;
-	afu = mdev_state->afu;
+	offset = pos & 0xFF;
 
-	pr_debug("%s - count: %ld, pos: %#llx, addr: %#x, val: %#llx\n",
-		 __func__, count, pos, addr, *(uint64_t *)val);
+	pr_debug("%s - %s, count: %ld, pos: %#llx, "
+		 "val: %#llx, offset: %#x\n",
+		 __func__, is_write? "write": "read", count, pos,
+		 is_write? *(u64 *)val: 0, offset);
 
-	/* Only one AFU is supported, for the time being */
-	if ((addr >= afu->config.global_mmio_offset) &&
-	    (addr < afu->config.global_mmio_offset + afu->config.global_mmio_size))
-	{
-		/* by pass - hcall attach from guest */
-		offset = addr & 0xFF;
-		if (offset == 0x30) {
-			pasid = *(u32 *)val & OCXL_DVSEC_PASID_MASK;
-			pidr = *(u32 *)val >> 20;
-			lpid = 1;
-			tidr = 0;
-			pr_debug("%s - add pasid: %d (pidr: %#x)\n",
-				 __func__, pasid, pidr);
-
-			rc = ocxl_link_add_pe(mdev_state->fn->link,
-					      pasid, lpid, pidr, tidr,
-					      0, current->mm,
-					      NULL, NULL);
-			if (rc)
-				dev_err(dev, "%s - Failed to add pe handle "
-					     "pasid: %d (rc: %d)\n",
-					__func__, pasid, rc);
-		}
+	if ((pos >= afu->config.global_mmio_offset) &&
+	    (pos < afu->config.global_mmio_offset + afu->config.global_mmio_size)) {
+		op_bar(afu->global_mmio_ptr + offset,
+		       val, count, is_write);
 	}
-	if ((addr >= afu->config.pp_mmio_offset) &&
-	    (addr < (afu->config.pp_mmio_offset + 
+	else if ((pos >= afu->config.pp_mmio_offset) &&
+	         (pos < (afu->config.pp_mmio_offset + 
 		    (afu->config.pp_mmio_stride * afu->pasid_max))))
 	{
-		/* WED Register (x0000)
-		 *     [63:12] Base EA of the start of the work element queue.
-		 */
-		pasid = (addr - afu->config.pp_mmio_offset) /
+		pasid = (pos - afu->config.pp_mmio_offset) /
 			 afu->config.pp_mmio_stride;
-		offset = addr & 0xFF;
-		pr_debug("%s - count: %ld, pos: %#llx, addr: %#x, pasid: %d, offset: %#x, val: %#llx\n",
-			 __func__, count, pos, addr, pasid, offset, *(uint64_t *)val);
 
-		out_le64(mdev_state->pp_mmio_ptr +
-			 (afu->config.pp_mmio_stride * pasid) +
-			 offset,
-			 *(u64 *)val);
+		op_bar(mdev_state->pp_mmio_ptr +
+		       (afu->config.pp_mmio_stride * pasid) +
+		       offset,
+		       val, count, is_write);
+	} else {
+		dev_err(dev, "%s: @0x%llx (unhandled)\n",
+			      __func__, pos);
+		rc = -EINVAL;
 	}
 
-	return 0;
-}
-
-static int handle_bar_read(struct mdev_device *mdev,
-			   void *val, size_t count, loff_t pos)
-{
-	pr_debug("%s - count: %ld, pos: %#llx\n",
-		 __func__, count, pos);
-
-	*(u32 *)val = 0;
-
-	return 0;
+	return rc;
 }
 
 static ssize_t mdev_access(struct mdev_device *mdev, void *val,
@@ -468,25 +439,20 @@ static ssize_t mdev_access(struct mdev_device *mdev, void *val,
 
 	mutex_lock(&mdev_state->ops_lock);
 
-	switch (pos) {
-	case 0 ... (OCXL_MDEV_CONFIG_SPACE_SIZE-1):
+	if (pos < MDEV_CONFIG_SPACE_SIZE) {
 		if (is_write)
 			rc = handle_pci_cfg_write(mdev, val, count, pos);
 		else
 			rc = handle_pci_cfg_read(mdev, val, count, pos);
-	break;
-	/* Only one AFU is supported, for the time being */
-	case OCXL_MDEV_BAR0_REGION_OFFSET ... (OCXL_MDEV_BAR0_REGION_OFFSET +
-					       OCXL_MDEV_BAR0_REGION_SIZE):
-		if (is_write)
-			rc = handle_bar_write(mdev, val, count, pos);
-		else
-			rc = handle_bar_read(mdev, val, count, pos);
-	break;
-	default:
+	}
+	else if ((pos >= MDEV_BAR0_REGION_OFFSET) &&
+		 (pos < MDEV_BAR0_REGION_OFFSET + mdev_state->bar0_size)) {
+		pos -= MDEV_BAR0_REGION_OFFSET;
+		rc = handle_bar(mdev, val, count, pos, is_write);
+	} else {
 		dev_err(dev, "%s: @0x%llx (unhandled)\n",
-			      __func__, pos);
-		rc = -1;
+			     __func__, pos);
+		rc = -EINVAL;
 	}
 
 	mutex_unlock(&mdev_state->ops_lock);
@@ -623,8 +589,7 @@ write_err:
 	return -EFAULT;
 }
 
-static int get_device_info(struct mdev_device *mdev,
-			   struct vfio_device_info *dev_info)
+static int get_device_info(struct vfio_device_info *dev_info)
 {
 	dev_info->flags = VFIO_DEVICE_FLAGS_PCI;
 	dev_info->num_regions = VFIO_PCI_NUM_REGIONS;
@@ -634,19 +599,20 @@ static int get_device_info(struct mdev_device *mdev,
 }
 
 static int get_region_info(struct mdev_device *mdev,
-			   struct vfio_region_info *region_info,
-			   u16 *cap_type_id, void **cap_type)
+			   struct vfio_region_info *region_info)
 {
+	struct mdev_state *mdev_state = mdev_get_drvdata(mdev);
+
 	switch (region_info->index) {
 	case VFIO_PCI_CONFIG_REGION_INDEX:
 		region_info->offset = 0;
-		region_info->size   = OCXL_MDEV_CONFIG_SPACE_SIZE;
+		region_info->size   = MDEV_CONFIG_SPACE_SIZE;
 		region_info->flags  = (VFIO_REGION_INFO_FLAG_READ |
 				       VFIO_REGION_INFO_FLAG_WRITE);
 		break;
 	case VFIO_PCI_BAR0_REGION_INDEX:
-		region_info->offset = OCXL_MDEV_BAR0_REGION_OFFSET;
-		region_info->size   = OCXL_MDEV_BAR0_REGION_SIZE;
+		region_info->offset = MDEV_BAR0_REGION_OFFSET;
+		region_info->size   = mdev_state->bar0_size;
 		region_info->flags  = (VFIO_REGION_INFO_FLAG_READ  |
 				       VFIO_REGION_INFO_FLAG_WRITE |
 				       VFIO_REGION_INFO_FLAG_MMAP);
@@ -668,13 +634,11 @@ static int get_irq_info(struct mdev_device *mdev,
 }
 
 static long ocxl_mdev_ioctl(struct mdev_device *mdev, unsigned int cmd,
-			   unsigned long arg)
+			    unsigned long arg)
 {
+	struct mdev_state *mdev_state = mdev_get_drvdata(mdev);
 	unsigned long minsz;
 	int rc = 0;
-	struct mdev_state *mdev_state;
-
-	mdev_state = mdev_get_drvdata(mdev);
 
 	switch (cmd) {
 	case VFIO_DEVICE_GET_INFO:
@@ -689,7 +653,7 @@ static long ocxl_mdev_ioctl(struct mdev_device *mdev, unsigned int cmd,
 		if (info.argsz < minsz)
 			return -EINVAL;
 
-		rc = get_device_info(mdev, &info);
+		rc = get_device_info(&info);
 		if (rc)
 			return rc;
 
@@ -700,8 +664,6 @@ static long ocxl_mdev_ioctl(struct mdev_device *mdev, unsigned int cmd,
 	case VFIO_DEVICE_GET_REGION_INFO:
 	{
 		struct vfio_region_info info;
-		u16 cap_type_id = 0;
-		void *cap_type = NULL;
 
 		minsz = offsetofend(struct vfio_region_info, offset);
 
@@ -711,8 +673,7 @@ static long ocxl_mdev_ioctl(struct mdev_device *mdev, unsigned int cmd,
 		if (info.argsz < minsz)
 			return -EINVAL;
 
-		rc = get_region_info(mdev, &info, &cap_type_id,
-				     &cap_type);
+		rc = get_region_info(mdev, &info);
 		if (rc)
 			return rc;
 
@@ -759,28 +720,6 @@ static const struct mdev_parent_ops ocxl_mdev_ops = {
 	.write			= ocxl_mdev_write,
 	.ioctl			= ocxl_mdev_ioctl,
 };
-
-int ocxl_mdev_attach_pasid(struct mdev_device *mdev, int pasid, int lpid,
-			   int pidr)
-{
-	struct device *dev = mdev_dev(mdev);
-	struct mdev_state *mdev_state;
-	int rc;
-
-	mdev_state = mdev_get_drvdata(mdev);
-
-	dev_dbg(dev, "%s: pasid=%d lpid=%d pidr=%d\n", __func__, pasid, lpid,
-		pidr);
-	rc = ocxl_link_add_pe(mdev_state->fn->link,
-			      pasid, lpid, pidr, 0,
-			      0, current->mm,
-			      NULL, NULL);
-	if (rc)
-		dev_err(dev, "%s - Failed to add pe handle "
-			"pasid: %d lpid: %d (rc: %d)\n", __func__, pasid, lpid,
-			rc);
-	return rc;
-}
 
 int ocxl_mdev_register(struct ocxl_fn *fn)
 {

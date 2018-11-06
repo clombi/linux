@@ -521,15 +521,6 @@ int ocxl_link_add_pe(void *link_handle, int pasid,
 	pe->tid = cpu_to_be32(tidr);
 	pe->amr = cpu_to_be64(amr);
 	pe->software_state = cpu_to_be32(SPA_PE_VALID);
-	pr_debug("%s, config_state: %#llx, lpid: %#x, pid: %#x, "
-		 "tid: %#x, amr: %#llx, software_state: %#x\n",
-		 __func__,
-		 be64_to_cpu(pe->config_state),
-		 be32_to_cpu(pe->lpid),
-		 be32_to_cpu(pe->pid),
-		 be32_to_cpu(pe->tid),
-		 be64_to_cpu(pe->amr),
-		 be32_to_cpu(pe->software_state));
 
 	mm_context_add_copro(mm);
 	/*
