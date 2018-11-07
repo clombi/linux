@@ -109,7 +109,6 @@ static u16 find_dvsec(struct pci_dev *dev, int dvsec_id, u16 *last_pos)
 		if (vendor == PCI_VENDOR_ID_IBM && id == dvsec_id)
 			return vsec;
 		*last_pos = vsec;
-		pr_debug("%s - last_pos: %#x\n", __func__, *last_pos);
 	}
 	return 0;
 }
@@ -160,16 +159,17 @@ static int read_afu_info(struct pci_dev *pcidev,
 
 static int update_config_space(struct mdev_state *mdev_state)
 {
+	u16 val16;
 	u8 val8;
 	int pos;
 
 	/* Max PASID Width for each guest -> 128 */
 	pos = mdev_state->pasid_cap_pos + PCI_PASID_CAP;
-	memcpy(&val8, mdev_state->vconfig + pos, sizeof(val8));
+	memcpy(&val16, mdev_state->vconfig + pos, sizeof(val16));
 
-	val8 &= ~GENMASK(12, 8);
-	val8 |= (0x7 << 8);
-	memcpy(mdev_state->vconfig + pos, &val8, sizeof(val8));
+	val16 &= ~GENMASK(12, 8);
+	val16 |= (0x7 << 8);
+	memcpy(mdev_state->vconfig + pos, &val16, sizeof(val16));
 
 	/* AFU PASID Length Supported -> 128 */
 	pos = mdev_state->dvsec_control_pos + OCXL_DVSEC_AFU_CTRL_PASID_SUP;
