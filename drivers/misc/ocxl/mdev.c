@@ -368,6 +368,7 @@ static void op_bar(void __iomem *addr, void *val, size_t count,
 	case 8:
 	if (is_write)
 		out_le64((u64 __iomem *)addr, *(u64 *)val);
+	break;
 	case 4:
 	if (is_write)
 		out_le32((u32 __iomem *)addr, *(u32 *)val);
