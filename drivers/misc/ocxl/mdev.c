@@ -13,6 +13,7 @@
 #define MDEV_BAR0_REGION_OFFSET         0x1000000
 
 #define EXTRACT_BIT(val, bit) (!!(val & BIT(bit)))
+#define EXTRACT_BITS(val, s, e) ((val & GENMASK(e, s)) >> s)
 
 #define PCI_EXT_CAP_VER_SHIFT      16
 #define PCI_EXT_CAP_NEXT_SHIFT     20
@@ -24,12 +25,18 @@
 
 #define CFG_TIMEOUT                3
 
+#define MDEV_MAX_DEVICES           4
+static u32 mdev_count;
+static u8 mdev_index[MDEV_MAX_DEVICES];
+
 /* State of each mdev device */
 struct mdev_state {
 	struct ocxl_fn *fn;
 	struct mutex ops_lock;
 
 	struct vfio_device_info dev_info;
+	int max_dev_pasid;  /* max pasid per device */
+	u8 index;           /* index number of the device: 0, 1, 2 or 3 */
 
 	u32 bar0_size;      /* size of BAR0 */
 
@@ -46,54 +53,58 @@ struct mdev_state {
 	void __iomem *pp_mmio_ptr; /* iomap on afu pp mmio */
 };
 
-static ssize_t device_api_show(struct kobject *kobj, struct device *dev,
-			       char *buf)
+static int expFunc(unsigned int x)
 {
-	return sprintf(buf, "%s\n", VFIO_DEVICE_API_PCI_STRING);
-}
-static MDEV_TYPE_ATTR_RO(device_api);
+	int exp;
 
-static ssize_t name_show(struct kobject *kobj, struct device *dev, char *buf)
+	exp = 1 << x;
+	return exp;
+}
+
+static int logFunc(unsigned int x)
+{ 
+	int log = -1;
+	while(x) {
+		log++;
+		x >>= 1;
+	}
+	return log;
+}
+
+static int get_hw_pasid(struct mdev_state *mdev_state,
+			int dev_pasid) 
 {
-	return sprintf(buf, "Virtual OpenCAPI adapter\n");
+	int hw_pasid;
+
+	hw_pasid = (mdev_state->index * mdev_state->max_dev_pasid) +
+		   dev_pasid;
+
+	return hw_pasid;
+
 }
-static MDEV_TYPE_ATTR_RO(name);
 
-static struct attribute *mdev_types_attrs[] = {
-	&mdev_type_attr_name.attr,
-	&mdev_type_attr_device_api.attr,
-	NULL,
-};
-
-static struct attribute_group mdev_type_group = {
-	.name = "ocxl",
-	.attrs = mdev_types_attrs,
-};
-
-static struct attribute_group *mdev_type_groups[] = {
-	&mdev_type_group,
-	NULL,
-};
-
-int ocxl_mdev_attach_pasid(struct mdev_device *mdev, int pasid, int lpid,
-			   int pidr)
+int ocxl_mdev_attach_pasid(struct mdev_device *mdev, int pasid,
+			   int lpid, int pidr)
 {
 	struct device *dev = mdev_dev(mdev);
 	struct mdev_state *mdev_state;
-	int rc;
+	int rc, hw_pasid;
 
 	mdev_state = mdev_get_drvdata(mdev);
 
-	dev_dbg(dev, "%s: pasid=%d lpid=%d pidr=%d\n",
-		     __func__, pasid, lpid, pidr);
+	/* convert device pasid to hw pasid */
+	hw_pasid = get_hw_pasid(mdev_state, pasid);
+
+	dev_dbg(dev, "%s: hw_pasid=%d (dev pasid: %d) lpid=%d pidr=%d\n",
+		     __func__, hw_pasid, pasid, lpid, pidr);
 	rc = ocxl_link_add_pe(mdev_state->fn->link,
-			      pasid, lpid, pidr, 0,
+			      hw_pasid, lpid, pidr, 0,
 			      0, current->mm,
 			      NULL, NULL);
 	if (rc)
 		dev_err(dev, "%s - Failed to add pe handle "
-			"pasid: %d lpid: %d (rc: %d)\n", __func__, pasid, lpid,
-			rc);
+			"hw_pasid=%d (dev pasid: %d) lpid: %d (rc: %d)\n",
+			__func__, hw_pasid, pasid, lpid, rc);
 	return rc;
 }
 
@@ -159,25 +170,44 @@ static int read_afu_info(struct pci_dev *pcidev,
 
 static int update_config_space(struct mdev_state *mdev_state)
 {
+	int pasid, pasid_pow, pos;
+	u32 val32;
 	u16 val16;
 	u8 val8;
-	int pos;
 
-	/* Max PASID Width for each guest -> 128 */
+	/* Max PASID Width.
+	 * This is the total for all AFUs associated with this Function
+	 */
 	pos = mdev_state->pasid_cap_pos + PCI_PASID_CAP;
 	memcpy(&val16, mdev_state->vconfig + pos, sizeof(val16));
+	pasid = expFunc(EXTRACT_BITS(val16, 8, 12));
+	mdev_state->max_dev_pasid = pasid / MDEV_MAX_DEVICES;
+	pasid_pow = logFunc(mdev_state->max_dev_pasid) / logFunc(2);
 
 	val16 &= ~GENMASK(12, 8);
-	val16 |= (0x7 << 8);
+	val16 |= (pasid_pow << 8);
 	memcpy(mdev_state->vconfig + pos, &val16, sizeof(val16));
 
-	/* AFU PASID Length Supported -> 128 */
+	/* Number of consecutive PASID’s this AFU supports */
 	pos = mdev_state->dvsec_control_pos + OCXL_DVSEC_AFU_CTRL_PASID_SUP;
 	memcpy(&val8, mdev_state->vconfig + pos, sizeof(val8));
+	pasid = expFunc(EXTRACT_BITS(val8, 0, 4));
+	pasid_pow = logFunc(pasid / MDEV_MAX_DEVICES) / logFunc(2);
 
 	val8 &= ~GENMASK(8, 0);
-	val8 |= 0x7;
+	val8 |= pasid_pow;
 	memcpy(mdev_state->vconfig + pos, &val8, sizeof(val8));
+
+	/* Number of consecutive PASID’s this AFU is allowed to use */
+	pos = mdev_state->dvsec_control_pos + OCXL_DVSEC_AFU_CTRL_PASID_EN;
+	memcpy(mdev_state->vconfig + pos, &val8, sizeof(val8));
+
+	/* PASID Base, First PASID this AFU is allowed to use */
+	pos = mdev_state->dvsec_control_pos + OCXL_DVSEC_AFU_CTRL_PASID_BASE;
+	memcpy(&val32, mdev_state->vconfig + pos, sizeof(val32));
+	val32 &= ~MDEV_DVSEC_PASID_MASK;
+	val32 |= 0x0 & MDEV_DVSEC_PASID_MASK;
+	memcpy(mdev_state->vconfig + pos, &val32, sizeof(val32));
 
 	return 0;
 }
@@ -216,7 +246,14 @@ static int ocxl_mdev_create(struct kobject *kobj, struct mdev_device *mdev)
 	struct ocxl_fn *fn = to_ocxl_function(mdev_parent_dev(mdev));
 	struct device *dev = mdev_dev(mdev);
 	struct mdev_state *mdev_state;
-	int rc = 0;
+	int rc = 0, i;
+
+	if (mdev_count >= MDEV_MAX_DEVICES) {
+		dev_err(dev, "Failed to create virtual OpenCAPI "
+			     "(Max devices (%d), reached\n",
+			     MDEV_MAX_DEVICES);
+		return -ENOMEM;
+	}
 
 	dev_dbg(dev, "Creating virtual OpenCAPI function %p\n", fn);
 
@@ -265,6 +302,16 @@ static int ocxl_mdev_create(struct kobject *kobj, struct mdev_device *mdev)
 	if (!rc)
 		rc = update_config_space(mdev_state);
 
+	if (!rc) {
+		mdev_count++;
+		for (i=0; i < MDEV_MAX_DEVICES; i++) {
+			if (mdev_index[i] == 0) {
+				mdev_index[i] = 1;
+				mdev_state->index = i;
+				break;
+			}
+		}
+	}
 	return rc;
 }
 
@@ -281,10 +328,13 @@ static int ocxl_mdev_remove(struct mdev_device *mdev)
 		mdev_state->pp_mmio_ptr = NULL;
 	}
 
+	mdev_index[mdev_state->index] = 0;
 	mdev_set_drvdata(mdev, NULL);
 	kfree(mdev_state->vafudesc);
 	kfree(mdev_state->vconfig);
 	kfree(mdev_state);
+
+	mdev_count--;
 	return 0;
 }
 
@@ -309,31 +359,35 @@ static int handle_pci_cfg_write(struct mdev_device *mdev,
 	struct mdev_state *mdev_state = mdev_get_drvdata(mdev);
 	struct pci_dev *pcidev = to_pci_dev(mdev_state->fn->dev.parent);
 	struct device *dev = mdev_dev(mdev);
-	int rc = 0, pasid;
+	int rc = 0, pasid, hw_pasid;
 
 	if (pos == mdev_state->dvsec_info_pos + OCXL_DVSEC_AFU_INFO_OFF)
-		*(u32 *)val |= 1<<31;
+		*(u32 *)val |= BIT(31);
 
 	if (pos == mdev_state->dvsec_control_pos + OCXL_DVSEC_AFU_CTRL_TERM_PASID) {
 		pasid = *(u32 *)val & MDEV_DVSEC_PASID_MASK;
 
+		/* convert device pasid to hw pasid */
+		hw_pasid = get_hw_pasid(mdev_state, pasid);
+
 		rc = ocxl_config_terminate_pasid(pcidev,
 						 mdev_state->dvsec_control_pos,
-						 pasid);
+						 hw_pasid);
 		if (rc)
 			dev_err(dev, "%s - Failed to terminate pasid, "
-				     "pasid: %d (rc: %d)\n",
-				     __func__, pasid, rc);
+				     "hw_pasid: %d (dev pasid: %d), (rc: %d)\n",
+				     __func__, hw_pasid, pasid, rc);
 		else {
 			rc = ocxl_link_remove_pe(mdev_state->fn->link,
-						 pasid);
+						 hw_pasid);
 			if (rc)
 				dev_err(dev, "%s - Failed to remove pe handle, "
-					     "pasid: %d (rc: %d)\n",
-					     __func__, pasid, rc);
+					     "hw_pasid: %d (dev pasid: %d), "
+					     "(rc: %d)\n",
+					     __func__, hw_pasid, pasid, rc);
 		}
 
-		*(u32 *)val &= ~(1<<20);
+		*(u32 *)val &= ~BIT(20);
 	}
 
 	memcpy(mdev_state->vconfig + pos, val, count);
@@ -390,21 +444,21 @@ static void op_bar(void __iomem *addr, void *val, size_t count,
 	}
 }
 
-static int handle_bar(struct mdev_device *mdev, void *val, size_t count,
-		      loff_t pos, bool is_write)
+static int handle_bar(struct mdev_device *mdev, void *val,
+		      size_t count, loff_t pos, bool is_write)
 {
 	struct mdev_state *mdev_state = mdev_get_drvdata(mdev);
 	struct device *dev = mdev_dev(mdev);
 	struct ocxl_afu *afu = mdev_state->afu;
-	int pasid, offset;
+	int pasid, offset, hw_pasid;
 	int rc = 0;
 
 	offset = pos & 0xFF;
 
 	pr_debug("%s - %s, count: %ld, pos: %#llx, "
 		 "val: %#llx, offset: %#x\n",
-		 __func__, is_write? "write": "read", count, pos,
-		 is_write? *(u64 *)val: 0, offset);
+		 __func__, is_write? "write": "read",
+		 count, pos, is_write? *(u64 *)val: 0, offset);
 
 	if ((pos >= afu->config.global_mmio_offset) &&
 	    (pos < afu->config.global_mmio_offset + afu->config.global_mmio_size)) {
@@ -418,8 +472,11 @@ static int handle_bar(struct mdev_device *mdev, void *val, size_t count,
 		pasid = (pos - afu->config.pp_mmio_offset) /
 			 afu->config.pp_mmio_stride;
 
+		/* convert device pasid to hw pasid */
+		hw_pasid = get_hw_pasid(mdev_state, pasid);
+
 		op_bar(mdev_state->pp_mmio_ptr +
-		       (afu->config.pp_mmio_stride * pasid) +
+		       (afu->config.pp_mmio_stride * hw_pasid) +
 		       offset,
 		       val, count, is_write);
 	} else {
@@ -442,9 +499,11 @@ static ssize_t mdev_access(struct mdev_device *mdev, void *val,
 
 	if (pos < MDEV_CONFIG_SPACE_SIZE) {
 		if (is_write)
-			rc = handle_pci_cfg_write(mdev, val, count, pos);
+			rc = handle_pci_cfg_write(mdev,
+						  val, count, pos);
 		else
-			rc = handle_pci_cfg_read(mdev, val, count, pos);
+			rc = handle_pci_cfg_read(mdev,
+						 val, count, pos);
 	}
 	else if ((pos >= MDEV_BAR0_REGION_OFFSET) &&
 		 (pos < MDEV_BAR0_REGION_OFFSET + mdev_state->bar0_size)) {
@@ -590,7 +649,8 @@ write_err:
 	return -EFAULT;
 }
 
-static int get_device_info(struct vfio_device_info *dev_info)
+static int get_device_info(struct mdev_device *mdev,
+			   struct vfio_device_info *dev_info)
 {
 	dev_info->flags = VFIO_DEVICE_FLAGS_PCI;
 	dev_info->num_regions = VFIO_PCI_NUM_REGIONS;
@@ -654,7 +714,7 @@ static long ocxl_mdev_ioctl(struct mdev_device *mdev, unsigned int cmd,
 		if (info.argsz < minsz)
 			return -EINVAL;
 
-		rc = get_device_info(&info);
+		rc = get_device_info(mdev, &info);
 		if (rc)
 			return rc;
 
@@ -709,6 +769,44 @@ static long ocxl_mdev_ioctl(struct mdev_device *mdev, unsigned int cmd,
 
 	return -ENOTTY;
 }
+
+static ssize_t name_show(struct kobject *kobj, struct device *dev,
+			 char *buf)
+{
+	return sprintf(buf, "Virtual OpenCAPI adapter\n");
+}
+static MDEV_TYPE_ATTR_RO(name);
+
+static ssize_t device_api_show(struct kobject *kobj, struct device *dev,
+			       char *buf)
+{
+	return sprintf(buf, "%s\n", VFIO_DEVICE_API_PCI_STRING);
+}
+static MDEV_TYPE_ATTR_RO(device_api);
+
+static ssize_t available_instances_show(struct kobject *kobj,
+					struct device *dev, char *buf)
+{
+	return sprintf(buf, "%d\n", MDEV_MAX_DEVICES - mdev_count);
+}
+MDEV_TYPE_ATTR_RO(available_instances);
+
+static struct attribute *mdev_types_attrs[] = {
+	&mdev_type_attr_name.attr,
+	&mdev_type_attr_device_api.attr,
+	&mdev_type_attr_available_instances.attr,
+	NULL,
+};
+
+static struct attribute_group mdev_type_group = {
+	.name = "ocxl",
+	.attrs = mdev_types_attrs,
+};
+
+static struct attribute_group *mdev_type_groups[] = {
+	&mdev_type_group,
+	NULL,
+};
 
 static const struct mdev_parent_ops ocxl_mdev_ops = {
 	.owner			= THIS_MODULE,
