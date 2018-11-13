@@ -42,8 +42,6 @@ struct mdev_state {
 	int max_dev_pasid;  /* max pasid per device */
 	u8 index;           /* index number of the device: 0, 1, 2 or 3 */
 
-	u32 bar0_size;      /* size of BAR0 */
-
 	u8 *vconfig;        /* virtual PCI Config */
 	u8 *vafudesc;       /* virtual AFU descriptor */
 
@@ -294,11 +292,6 @@ static int ocxl_mdev_create(struct kobject *kobj, struct mdev_device *mdev)
 		return -ENOMEM;
 	}
 
-	mdev_state->bar0_size = mdev_state->afu->config.global_mmio_offset +
-				mdev_state->afu->config.global_mmio_size +
-				(mdev_state->afu->config.pp_mmio_stride *
-				mdev_state->afu->pasid_max);
-
 	mutex_init(&mdev_state->ops_lock);
 	mdev_set_drvdata(mdev, mdev_state);
 
@@ -513,6 +506,8 @@ static ssize_t mdev_access(struct mdev_device *mdev, void *val,
 						 val, count, pos);
 		break;
 	case VFIO_PCI_BAR0_REGION_INDEX:
+	case VFIO_PCI_BAR2_REGION_INDEX:
+	case VFIO_PCI_BAR4_REGION_INDEX:
 		rc = handle_bar(mdev, val, count, pos, is_write);
 		break;
 	default:
@@ -669,6 +664,7 @@ static int get_region_info(struct mdev_device *mdev,
 			   struct vfio_region_info *info)
 {
 	struct mdev_state *mdev_state = mdev_get_drvdata(mdev);
+	struct pci_dev *pcidev = to_pci_dev(mdev_state->fn->dev.parent);
 
 	switch (info->index) {
 	case VFIO_PCI_CONFIG_REGION_INDEX:
@@ -679,7 +675,21 @@ static int get_region_info(struct mdev_device *mdev,
 		break;
 	case VFIO_PCI_BAR0_REGION_INDEX:
 		info->offset = VFIO_PCI_INDEX_TO_OFFSET(info->index);
-		info->size   = mdev_state->bar0_size;
+		info->size   = pci_resource_len(pcidev, 0);
+		info->flags  = (VFIO_REGION_INFO_FLAG_READ  |
+				VFIO_REGION_INFO_FLAG_WRITE |
+				VFIO_REGION_INFO_FLAG_MMAP);
+		break;
+	case VFIO_PCI_BAR2_REGION_INDEX:
+		info->offset = VFIO_PCI_INDEX_TO_OFFSET(info->index);
+		info->size   = pci_resource_len(pcidev, 2);
+		info->flags  = (VFIO_REGION_INFO_FLAG_READ  |
+				VFIO_REGION_INFO_FLAG_WRITE |
+				VFIO_REGION_INFO_FLAG_MMAP);
+		break;
+	case VFIO_PCI_BAR4_REGION_INDEX:
+		info->offset = VFIO_PCI_INDEX_TO_OFFSET(info->index);
+		info->size   = pci_resource_len(pcidev, 4);
 		info->flags  = (VFIO_REGION_INFO_FLAG_READ  |
 				VFIO_REGION_INFO_FLAG_WRITE |
 				VFIO_REGION_INFO_FLAG_MMAP);
