@@ -6,11 +6,15 @@
 
 #include "ocxl_internal.h"
 
+#define VFIO_PCI_OFFSET_SHIFT   40
+#define VFIO_PCI_OFFSET_TO_INDEX(off)   (off >> VFIO_PCI_OFFSET_SHIFT)
+#define VFIO_PCI_INDEX_TO_OFFSET(index) ((u64)(index) << VFIO_PCI_OFFSET_SHIFT)
+#define VFIO_PCI_OFFSET_MASK    (((u64)(1) << VFIO_PCI_OFFSET_SHIFT) - 1)
+
 #define MDEV_DVSEC_PASID_MASK           GENMASK(19, 0)
 #define MDEV_CONFIG_SPACE_SIZE          PCI_CFG_SPACE_EXP_SIZE
 #define MDEV_CAPABILITY_SIZE            0x100
 #define MDEV_AFU_DESC_TEMPLATE_SIZE     0x58
-#define MDEV_BAR0_REGION_OFFSET         0x1000000
 
 #define EXTRACT_BIT(val, bit) (!!(val & BIT(bit)))
 #define EXTRACT_BITS(val, s, e) ((val & GENMASK(e, s)) >> s)
@@ -489,27 +493,29 @@ static int handle_bar(struct mdev_device *mdev, void *val,
 }
 
 static ssize_t mdev_access(struct mdev_device *mdev, void *val,
-			   size_t count, loff_t pos, bool is_write)
+			   size_t count, loff_t *ppos, bool is_write)
 {
 	struct mdev_state *mdev_state = mdev_get_drvdata(mdev);
+	unsigned int index = VFIO_PCI_OFFSET_TO_INDEX(*ppos);
+	uint64_t pos = *ppos & VFIO_PCI_OFFSET_MASK;
 	struct device *dev = mdev_dev(mdev);
 	int rc = 0;
 
 	mutex_lock(&mdev_state->ops_lock);
 
-	if (pos < MDEV_CONFIG_SPACE_SIZE) {
+	switch (index) {
+	case VFIO_PCI_CONFIG_REGION_INDEX:
 		if (is_write)
 			rc = handle_pci_cfg_write(mdev,
 						  val, count, pos);
 		else
 			rc = handle_pci_cfg_read(mdev,
 						 val, count, pos);
-	}
-	else if ((pos >= MDEV_BAR0_REGION_OFFSET) &&
-		 (pos < MDEV_BAR0_REGION_OFFSET + mdev_state->bar0_size)) {
-		pos -= MDEV_BAR0_REGION_OFFSET;
+		break;
+	case VFIO_PCI_BAR0_REGION_INDEX:
 		rc = handle_bar(mdev, val, count, pos, is_write);
-	} else {
+		break;
+	default:
 		dev_err(dev, "%s: @0x%llx (unhandled)\n",
 			     __func__, pos);
 		rc = -EINVAL;
@@ -533,7 +539,7 @@ static ssize_t ocxl_mdev_read(struct mdev_device *mdev,
 			u32 val;
 
 			rc =  mdev_access(mdev, (void *)&val, sizeof(val),
-					  *ppos, false);
+					  ppos, false);
 			if (rc < 0)
 				goto read_err;
 
@@ -545,7 +551,7 @@ static ssize_t ocxl_mdev_read(struct mdev_device *mdev,
 			u16 val;
 
 			rc = mdev_access(mdev, (void *)&val, sizeof(val),
-					 *ppos, false);
+					 ppos, false);
 			if (rc < 0)
 				goto read_err;
 
@@ -557,7 +563,7 @@ static ssize_t ocxl_mdev_read(struct mdev_device *mdev,
 			u8 val;
 
 			rc = mdev_access(mdev, (void *)&val, sizeof(val),
-					 *ppos, false);
+					 ppos, false);
 			if (rc < 0)
 				goto read_err;
 
@@ -596,7 +602,7 @@ static ssize_t ocxl_mdev_write(struct mdev_device *mdev,
 				goto write_err;
 
 			rc = mdev_access(mdev, &val, sizeof(val),
-					 *ppos, true);
+					 ppos, true);
 			if (rc < 0)
 				goto write_err;
 
@@ -608,7 +614,7 @@ static ssize_t ocxl_mdev_write(struct mdev_device *mdev,
 				goto write_err;
 
 			rc = mdev_access(mdev, &val, sizeof(val),
-					 *ppos, true);
+					 ppos, true);
 			if (rc < 0)
 				goto write_err;
 
@@ -620,7 +626,7 @@ static ssize_t ocxl_mdev_write(struct mdev_device *mdev,
 				goto write_err;
 
 			rc = mdev_access(mdev, &val, sizeof(val),
-					 *ppos, true);
+					 ppos, true);
 			if (rc < 0)
 				goto write_err;
 
@@ -632,7 +638,7 @@ static ssize_t ocxl_mdev_write(struct mdev_device *mdev,
 				goto write_err;
 
 			rc = mdev_access(mdev, &val, sizeof(val),
-					 *ppos, true);
+					 ppos, true);
 			if (rc < 0)
 				goto write_err;
 
@@ -660,28 +666,28 @@ static int get_device_info(struct mdev_device *mdev,
 }
 
 static int get_region_info(struct mdev_device *mdev,
-			   struct vfio_region_info *region_info)
+			   struct vfio_region_info *info)
 {
 	struct mdev_state *mdev_state = mdev_get_drvdata(mdev);
 
-	switch (region_info->index) {
+	switch (info->index) {
 	case VFIO_PCI_CONFIG_REGION_INDEX:
-		region_info->offset = 0;
-		region_info->size   = MDEV_CONFIG_SPACE_SIZE;
-		region_info->flags  = (VFIO_REGION_INFO_FLAG_READ |
-				       VFIO_REGION_INFO_FLAG_WRITE);
+		info->offset = VFIO_PCI_INDEX_TO_OFFSET(info->index);
+		info->size   = MDEV_CONFIG_SPACE_SIZE;
+		info->flags  = (VFIO_REGION_INFO_FLAG_READ |
+				VFIO_REGION_INFO_FLAG_WRITE);
 		break;
 	case VFIO_PCI_BAR0_REGION_INDEX:
-		region_info->offset = MDEV_BAR0_REGION_OFFSET;
-		region_info->size   = mdev_state->bar0_size;
-		region_info->flags  = (VFIO_REGION_INFO_FLAG_READ  |
-				       VFIO_REGION_INFO_FLAG_WRITE |
-				       VFIO_REGION_INFO_FLAG_MMAP);
+		info->offset = VFIO_PCI_INDEX_TO_OFFSET(info->index);
+		info->size   = mdev_state->bar0_size;
+		info->flags  = (VFIO_REGION_INFO_FLAG_READ  |
+				VFIO_REGION_INFO_FLAG_WRITE |
+				VFIO_REGION_INFO_FLAG_MMAP);
 		break;
 	default:
-		region_info->size   = 0;
-		region_info->offset = 0;
-		region_info->flags  = 0;
+		info->size   = 0;
+		info->offset = 0;
+		info->flags  = 0;
 	}
 
 	return 0;
