@@ -14,6 +14,7 @@
 #define MDEV_DVSEC_PASID_MASK           GENMASK(19, 0)
 #define MDEV_CONFIG_SPACE_SIZE          PCI_CFG_SPACE_EXP_SIZE
 #define MDEV_CAPABILITY_SIZE            0x100
+#define OCXL_MAX_AFU_PER_FUNCTION       64
 #define MDEV_AFU_DESC_TEMPLATE_SIZE     0x58
 
 #define EXTRACT_BIT(val, bit) (!!(val & BIT(bit)))
@@ -43,7 +44,7 @@ struct mdev_state {
 	u8 index;           /* index number of the device: 0, 1, 2 or 3 */
 
 	u8 *vconfig;        /* virtual PCI Config */
-	u8 *vafudesc;       /* virtual AFU descriptor */
+	u8 *vafudesc[OCXL_MAX_AFU_PER_FUNCTION]; /* virtual AFUs descriptor */
 
 	u16 pasid_cap_pos;  /* Offset of PASID Capability */
 	u16 dvsec_tl_pos;   /* Offset of the DVSEC - Transport Layer */
@@ -52,6 +53,7 @@ struct mdev_state {
 	u16 dvsec_control_pos; /* Offset of the DVSEC - AFU Control */
 
 	struct ocxl_afu *afu;      /* first afu in the list */
+	u8 afu_index;
 	void __iomem *pp_mmio_ptr; /* iomap on afu pp mmio */
 };
 
@@ -217,8 +219,9 @@ static int update_config_space(struct mdev_state *mdev_state)
 static int create_config_space(struct mdev_state *mdev_state)
 {
 	struct pci_dev *pcidev = to_pci_dev(mdev_state->fn->dev.parent);
-	u32 val;
 	int i, pos;
+	u32 val;
+	u8 afu;
 
 	/* Copy the original pci config */
 	for (i = 0; i < MDEV_CONFIG_SPACE_SIZE; i+=4) {
@@ -235,9 +238,15 @@ static int create_config_space(struct mdev_state *mdev_state)
 
 	/* Copy the AFU Descriptor Template Data */
 	pos = mdev_state->dvsec_info_pos;
-	for (i = 0; i < MDEV_AFU_DESC_TEMPLATE_SIZE; i+=4) {
-		read_afu_info(pcidev, mdev_state, i, &val);
-		memcpy(mdev_state->vafudesc + i, &val, sizeof(val));
+	for (afu = 0; afu <= mdev_state->fn->config.max_afu_index; afu++) {
+		pci_write_config_byte(pcidev,
+				      mdev_state->dvsec_info_pos + 
+				      OCXL_DVSEC_AFU_INFO_AFU_IDX,
+				      afu);
+		for (i = 0; i < MDEV_AFU_DESC_TEMPLATE_SIZE; i+=4) {
+			read_afu_info(pcidev, mdev_state, i, &val);
+			memcpy(mdev_state->vafudesc[afu] + i, &val, sizeof(val));
+		}
 	}
 
 	return 0;
@@ -249,6 +258,7 @@ static int ocxl_mdev_create(struct kobject *kobj, struct mdev_device *mdev)
 	struct device *dev = mdev_dev(mdev);
 	struct mdev_state *mdev_state;
 	int rc = 0, i;
+	u8 afu;
 
 	if (mdev_count >= MDEV_MAX_DEVICES) {
 		dev_err(dev, "Failed to create virtual OpenCAPI "
@@ -268,15 +278,18 @@ static int ocxl_mdev_create(struct kobject *kobj, struct mdev_device *mdev)
 		kfree(mdev_state);
 		return -ENOMEM;
 	}
-
-	mdev_state->vafudesc = kzalloc(MDEV_AFU_DESC_TEMPLATE_SIZE, GFP_KERNEL);
-	if (mdev_state->vafudesc == NULL) {
-		kfree(mdev_state->vconfig);
-		kfree(mdev_state);
-		return -ENOMEM;
-	}
-
 	mdev_state->fn = fn;
+
+	for (afu = 0; afu <= fn->config.max_afu_index; afu++) {
+		mdev_state->vafudesc[afu] = kzalloc(MDEV_AFU_DESC_TEMPLATE_SIZE,
+						    GFP_KERNEL);
+		if (mdev_state->vafudesc[afu] == NULL) {
+			kfree(mdev_state->vconfig);
+			kfree(mdev_state);
+			return -ENOMEM;
+		}
+	}
+	mdev_state->afu_index = 0;
 
 	/* For the time being, only one afu is supported */
 
@@ -317,6 +330,7 @@ static int ocxl_mdev_remove(struct mdev_device *mdev)
 	struct ocxl_fn *fn = to_ocxl_function(mdev_parent_dev(mdev));
 	struct mdev_state *mdev_state = mdev_get_drvdata(mdev);
 	struct device *dev = mdev_dev(mdev);
+	u8 afu;
 
 	dev_dbg(dev, "Removing virtual OpenCAPI function %p\n", fn);
 
@@ -327,7 +341,8 @@ static int ocxl_mdev_remove(struct mdev_device *mdev)
 
 	mdev_index[mdev_state->index] = 0;
 	mdev_set_drvdata(mdev, NULL);
-	kfree(mdev_state->vafudesc);
+	for (afu = 0; afu <= mdev_state->fn->config.max_afu_index; afu++)
+		kfree(mdev_state->vafudesc[afu]);
 	kfree(mdev_state->vconfig);
 	kfree(mdev_state);
 
@@ -396,6 +411,7 @@ static int handle_pci_cfg_read(struct mdev_device *mdev,
 			       void *val, size_t count, loff_t pos)
 {
 	struct mdev_state *mdev_state = mdev_get_drvdata(mdev);
+	u8 afu_index = mdev_state->afu_index;
 	u32 offset;
 
 	if (pos == mdev_state->dvsec_info_pos + OCXL_DVSEC_AFU_INFO_DATA) {
@@ -405,7 +421,7 @@ static int handle_pci_cfg_read(struct mdev_device *mdev,
 		if (offset >= MDEV_AFU_DESC_TEMPLATE_SIZE)
 			return -EINVAL;
 
-		memcpy(val, mdev_state->vafudesc + offset, count);
+		memcpy(val, mdev_state->vafudesc[afu_index] + offset, count);
 	} else
 		memcpy(val, mdev_state->vconfig + pos, count);
 
@@ -417,27 +433,27 @@ static void op_bar(void __iomem *addr, void *val, size_t count,
 {
 	switch(count) {
 	case 8:
-	if (is_write)
-		out_le64((u64 __iomem *)addr, *(u64 *)val);
-	break;
+		if (is_write)
+			out_le64((u64 __iomem *)addr, *(u64 *)val);
+		break;
 	case 4:
-	if (is_write)
-		out_le32((u32 __iomem *)addr, *(u32 *)val);
-	else
-		*(u32 *)val = in_le32((u32 __iomem *)addr);
-	break;
+		if (is_write)
+			out_le32((u32 __iomem *)addr, *(u32 *)val);
+		else
+			*(u32 *)val = in_le32((u32 __iomem *)addr);
+		break;
 	case 2:
-	if (is_write)
-		out_le16((u16 __iomem *)addr, *(u16 *)val);
-	else
-		*(u16 *)val = in_le16((u16 __iomem *)addr);
-	break;
+		if (is_write)
+			out_le16((u16 __iomem *)addr, *(u16 *)val);
+		else
+			*(u16 *)val = in_le16((u16 __iomem *)addr);
+		break;
 	case 1:
-	if (is_write)
-		out_8((u8 __iomem *)addr, *(u8 *)val);
-	else
-		*(u8 *)val = in_8((u8 __iomem *)addr);
-	break;
+		if (is_write)
+			out_8((u8 __iomem *)addr, *(u8 *)val);
+		else
+			*(u8 *)val = in_8((u8 __iomem *)addr);
+		break;
 	}
 }
 
