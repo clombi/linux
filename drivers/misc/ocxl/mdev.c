@@ -693,22 +693,19 @@ static int get_region_info(struct mdev_device *mdev,
 		info->offset = VFIO_PCI_INDEX_TO_OFFSET(info->index);
 		info->size   = pci_resource_len(pcidev, 0);
 		info->flags  = (VFIO_REGION_INFO_FLAG_READ  |
-				VFIO_REGION_INFO_FLAG_WRITE |
-				VFIO_REGION_INFO_FLAG_MMAP);
+				VFIO_REGION_INFO_FLAG_WRITE);
 		break;
 	case VFIO_PCI_BAR2_REGION_INDEX:
 		info->offset = VFIO_PCI_INDEX_TO_OFFSET(info->index);
 		info->size   = pci_resource_len(pcidev, 2);
 		info->flags  = (VFIO_REGION_INFO_FLAG_READ  |
-				VFIO_REGION_INFO_FLAG_WRITE |
-				VFIO_REGION_INFO_FLAG_MMAP);
+				VFIO_REGION_INFO_FLAG_WRITE);
 		break;
 	case VFIO_PCI_BAR4_REGION_INDEX:
 		info->offset = VFIO_PCI_INDEX_TO_OFFSET(info->index);
 		info->size   = pci_resource_len(pcidev, 4);
 		info->flags  = (VFIO_REGION_INFO_FLAG_READ  |
-				VFIO_REGION_INFO_FLAG_WRITE |
-				VFIO_REGION_INFO_FLAG_MMAP);
+				VFIO_REGION_INFO_FLAG_WRITE);
 		break;
 	default:
 		info->size   = 0;
