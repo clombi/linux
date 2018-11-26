@@ -52,7 +52,7 @@ struct mdev_state {
 	u16 dvsec_info_pos; /* Offset of the DVSEC - AFU information */
 	u16 dvsec_control_pos; /* Offset of the DVSEC - AFU Control */
 
-	struct ocxl_afu *afu;      /* first afu in the list */
+	struct ocxl_afu *afu;
 	u8 afu_index;
 	void __iomem *pp_mmio_ptr; /* iomap on afu pp mmio */
 };
@@ -291,12 +291,6 @@ static int ocxl_mdev_create(struct kobject *kobj, struct mdev_device *mdev)
 	}
 	mdev_state->afu_index = 0;
 
-	/* For the time being, only one afu is supported */
-
-	/* Next step. Handle multiple AFU
-	 * See p34 (Table 4-15. Example MMIO BAR Space Contents) of
-	 * OpenCAPI_CFG_v05_081717.pdf
-	 */
 	mdev_state->afu = list_first_entry(&fn->afu_list, struct ocxl_afu, list);
 	mdev_state->pp_mmio_ptr = ioremap(mdev_state->afu->pp_mmio_start,
 					  mdev_state->afu->config.pp_mmio_stride * mdev_state->afu->pasid_max);
