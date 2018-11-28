@@ -293,7 +293,8 @@ static int ocxl_mdev_create(struct kobject *kobj, struct mdev_device *mdev)
 
 	mdev_state->afu = list_first_entry(&fn->afu_list, struct ocxl_afu, list);
 	mdev_state->pp_mmio_ptr = ioremap(mdev_state->afu->pp_mmio_start,
-					  mdev_state->afu->config.pp_mmio_stride * mdev_state->afu->pasid_max);
+					  mdev_state->afu->config.pp_mmio_stride *
+					  mdev_state->afu->pasid_max);
 	if (!mdev_state->pp_mmio_ptr) {
 		dev_err(dev, "Error mapping pp mmio area\n");
 		return -ENOMEM;
@@ -457,30 +458,40 @@ static int handle_bar(struct mdev_device *mdev, void *val,
 	struct mdev_state *mdev_state = mdev_get_drvdata(mdev);
 	struct device *dev = mdev_dev(mdev);
 	struct ocxl_afu *afu = mdev_state->afu;
-	int pasid, offset, hw_pasid;
+	int pasid, hw_pasid;
+	loff_t offset;
 	int rc = 0;
 
-	offset = pos & 0xFF;
-
-	pr_debug("%s - %s, count: %ld, pos: %#llx, "
-		 "val: %#llx, offset: %#x\n",
-		 __func__, is_write? "write": "read",
-		 count, pos, is_write? *(u64 *)val: 0, offset);
-
 	if ((pos >= afu->config.global_mmio_offset) &&
-	    (pos < afu->config.global_mmio_offset + afu->config.global_mmio_size)) {
-		op_bar(afu->global_mmio_ptr + offset,
-		       val, count, is_write);
+	    (pos < afu->config.global_mmio_offset +
+		   afu->config.global_mmio_size)) {
+
+		offset = pos - afu->config.global_mmio_offset;
+		pr_debug("%s - %s, count: %ld, pos: %#llx, "
+			 "offset: %#llx, val: %#llx\n",
+			 __func__, is_write? "write": "read",
+			 count, pos, offset, is_write? *(u64 *)val: 0);
+
+		op_bar(afu->global_mmio_ptr + offset, val, count, is_write);
 	}
 	else if ((pos >= afu->config.pp_mmio_offset) &&
-	         (pos < (afu->config.pp_mmio_offset + 
-		    (afu->config.pp_mmio_stride * afu->pasid_max))))
-	{
+		 (pos < (afu->config.pp_mmio_offset +
+			(afu->config.pp_mmio_stride * afu->pasid_max)))) {
+
 		pasid = (pos - afu->config.pp_mmio_offset) /
 			 afu->config.pp_mmio_stride;
+		offset = (pos - afu->config.pp_mmio_offset) -
+			 (afu->config.pp_mmio_stride * pasid);
 
 		/* convert device pasid to hw pasid */
 		hw_pasid = get_hw_pasid(mdev_state, pasid);
+
+		pr_debug("%s - %s, count: %ld, pos: %#llx, "
+			 "hw_pasid: %d (dev pasid: %d), "
+			 "offset: %#llx, val: %#llx\n",
+			 __func__, is_write? "write": "read",
+			 count, pos, hw_pasid, pasid,
+			 offset, is_write? *(u64 *)val: 0);
 
 		op_bar(mdev_state->pp_mmio_ptr +
 		       (afu->config.pp_mmio_stride * hw_pasid) +
