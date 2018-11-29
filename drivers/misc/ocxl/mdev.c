@@ -17,6 +17,8 @@
 #define OCXL_MAX_AFU_PER_FUNCTION       64
 #define MDEV_AFU_DESC_TEMPLATE_SIZE     0x58
 
+#define OCXL_MMIO_PASID_REGISTER        0x50
+
 #define EXTRACT_BIT(val, bit) (!!(val & BIT(bit)))
 #define EXTRACT_BITS(val, s, e) ((val & GENMASK(e, s)) >> s)
 
@@ -471,6 +473,9 @@ static int handle_bar(struct mdev_device *mdev, void *val,
 			 "offset: %#llx, val: %#llx\n",
 			 __func__, is_write? "write": "read",
 			 count, pos, offset, is_write? *(u64 *)val: 0);
+
+		if (offset == OCXL_MMIO_PASID_REGISTER)
+			*(u64 *)val |= get_hw_pasid(mdev_state, *(u64 *)val);
 
 		op_bar(afu->global_mmio_ptr + offset, val, count, is_write);
 	}
